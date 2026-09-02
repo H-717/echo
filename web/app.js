@@ -428,10 +428,24 @@ const fitCache = new Map();
 const fitKey = () => `${current.meta.id}:${viewportW()}x${viewportH()}` +
   `:${prefs.chords ? 1 : 0}:${shownSteps()}`;
 
+/**
+ * Width the lyrics should occupy for a given column count.
+ *
+ * Filling the whole screen is only right when there are columns to fill it
+ * with. A single column stretched across a wide display leaves short lines
+ * hugging the left edge with most of the screen empty, so the box is capped to
+ * a sensible measure per column and centred.
+ */
+function setWidth(song, cols, chorded) {
+  const per = chorded ? 660 : 560;
+  const wanted = cols * per + (cols - 1) * 44;
+  const avail = viewportW() - 32;
+  song.style.setProperty('--measure', Math.min(wanted, avail) + 'px');
+}
+
 function layoutFit(el, song) {
   song.classList.add('fit');
   el.classList.add('cols');
-  song.style.setProperty('--measure', 'none');
 
   const MIN = 13, MAX = 46;
   // Measure the dock rather than assuming its height, or the page ends up a
@@ -456,64 +470,81 @@ function layoutFit(el, song) {
     el.style.setProperty('--cols', String(cols));
     el.style.setProperty('--lyric-size', size + 'px');
   };
-  // Measuring a multi-column box is not as simple as reading its height.
-  // Content that will not fit spills sideways into extra columns, and a stanza
-  // that cannot be split (break-inside: avoid) can hang below its column
-  // without scrollHeight ever reporting it. So check all three: the width, the
-  // reported height, and where the stanza boxes actually end.
-  const overflows = (room) => {
-    if (el.scrollWidth > el.clientWidth + 1) return true;
+
+  // How far down the content actually reaches. A stanza that cannot be split
+  // can hang below its column without scrollHeight ever reporting it.
+  const contentHeight = () => {
     const top = el.getBoundingClientRect().top;
     let deepest = 0;
     for (const st of el.children) {
       const b = st.getBoundingClientRect().bottom - top;
       if (b > deepest) deepest = b;
     }
-    return Math.max(el.scrollHeight, deepest) > room + 1;
+    return Math.max(el.scrollHeight, deepest);
   };
+
+  // Content that will not fit also spills sideways into extra columns.
+  const overflows = (room) => el.scrollWidth > el.clientWidth + 1 || contentHeight() > room + 1;
 
   const room = avail();
   const key = fitKey();
   const cached = fitCache.get(key);
 
   if (cached) {
+    setWidth(song, cached.cols, chorded);
     apply(cached.cols, cached.size);
     if (!overflows(room)) {
       el.classList.toggle('ruled', cached.cols > 1);
       el.dataset.overflowing = String(cached.over);
       document.documentElement.classList.toggle('locked', !cached.over);
+      song.style.paddingBottom = cached.over ? `${dockH + 28}px` : '0px';
       return;
     }
-    fitCache.delete(key);   // conditions moved; fall through and re-fit
+    fitCache.delete(key);
   }
 
-  let cols = maxCols, size = clamp(lastFitSize);
-  apply(cols, size);
+  // Largest size that fits for a given column count. Height is close to linear
+  // in font size, so predict and correct rather than stepping one pixel at a
+  // time — stepping meant a song could never climb far from where the previous
+  // one happened to land.
+  const converge = (c) => {
+    let sz = clamp(lastFitSize);
+    apply(c, sz);
+    for (let i = 0; i < 5; i++) {
+      const h = contentHeight();
+      if (h <= 0) break;
+      const next = clamp(sz * room / h);
+      if (next === sz) break;
+      sz = next;
+      apply(c, sz);
+    }
+    for (let i = 0; i < 8 && sz > MIN && overflows(room); i++) { sz -= 1; apply(c, sz); }
+    for (let i = 0; i < 8 && sz < MAX; i++) {
+      apply(c, sz + 1);
+      if (overflows(room)) { apply(c, sz); break; }
+      sz += 1;
+    }
+    return sz;
+  };
 
-  // Shrink until it genuinely fits, then try to grow back into any slack.
-  for (let i = 0; i < 6 && overflows(room) && size > MIN; i++) {
-    const ratio = room / Math.max(1, el.scrollHeight);
-    size = clamp(Math.min(size - 1, Math.floor(size * ratio)));
-    apply(cols, size);
-  }
-  for (let i = 0; i < 4 && size < MAX; i++) {
-    apply(cols, size + 1);
-    if (overflows(room)) { apply(cols, size); break; }
-    size++;
-  }
+  setWidth(song, maxCols, chorded);
+  let cols = maxCols;
+  let size = converge(cols);
 
   // Prefer the fewest columns that still holds this size — less eye travel.
   while (cols > 1) {
+    setWidth(song, cols - 1, chorded);
     apply(cols - 1, size);
-    if (overflows(room)) { apply(cols, size); break; }
-    cols--;
+    if (overflows(room)) { setWidth(song, cols, chorded); apply(cols, size); break; }
+    cols -= 1;
   }
 
-  // Anything still poking past the fold means a scrollbar for a handful of
-  // pixels, which is worse than one step smaller. Tighten until it clears.
-  for (let i = 0; i < 8 && size > MIN && overflows(avail()); i++) {
-    size -= 1;
-    apply(cols, size);
+  // Still too tall at a comfortable measure? Longer lines are a better trade
+  // than making someone scroll mid-song, so spend the rest of the width.
+  if (overflows(room) && maxCols * (chorded ? 660 : 560) < viewportW() - 32) {
+    cols = maxCols;
+    song.style.setProperty('--measure', (viewportW() - 32) + 'px');
+    size = converge(cols);
   }
 
   lastFitSize = size;
@@ -790,27 +821,34 @@ function openGrooveSheet() {
     <h2>How it goes</h2>
     <p style="font-size:13.5px;color:var(--ink-3);margin:-6px 0 16px">Saved on this device only. Nothing is sent anywhere.</p>
 
-    <h3>Time</h3>
-    <div class="opts">${G.METERS.map((m) =>
-      `<button class="opt" data-meter="${m}" aria-pressed="${g.meter === m}">${m}</button>`).join('')}</div>
-
-    <div class="field" style="margin-top:16px">
-      <label for="bpm">Tempo</label>
-      <div style="display:flex;gap:8px">
-        <input id="bpm" type="number" min="30" max="260" inputmode="numeric" value="${g.bpm || ''}" placeholder="e.g. 92" style="flex:1 1 auto">
-        <button class="btn" data-act="tap" style="flex:0 0 110px">Tap it</button>
+    <div class="pair">
+      <div>
+        <h3>Time</h3>
+        <div class="opts">${G.METERS.map((m) =>
+          `<button class="opt" data-meter="${m}" aria-pressed="${g.meter === m}">${m}</button>`).join('')}</div>
       </div>
-      <div class="hint" id="taphint">Tap the button in time with the song to set the tempo.</div>
+      <div>
+        <h3>Feel</h3>
+        <div class="opts">${Object.entries(G.FEELS).map(([v, l]) =>
+          `<button class="opt" data-feel="${v}" aria-pressed="${g.feel === v}">${l}</button>`).join('')}</div>
+      </div>
     </div>
 
-    <h3>Feel</h3>
-    <div class="opts">${Object.entries(G.FEELS).map(([v, l]) =>
-      `<button class="opt" data-feel="${v}" aria-pressed="${g.feel === v}">${l}</button>`).join('')}</div>
+    <div class="pair">
+      <div class="field">
+        <label for="bpm">Tempo</label>
+        <div style="display:flex;gap:8px">
+          <input id="bpm" type="number" min="30" max="260" inputmode="numeric" value="${g.bpm || ''}" placeholder="e.g. 92" style="flex:1 1 auto;min-width:0">
+          <button class="btn" data-act="tap" style="flex:0 0 92px">Tap it</button>
+        </div>
+        <div class="hint" id="taphint">Tap along with the song.</div>
+      </div>
 
-    <div class="field" style="margin-top:16px">
-      <label for="strum">Strum pattern</label>
-      <input id="strum" type="text" value="${esc(g.strum || '')}" placeholder="D DU UDU" autocomplete="off" spellcheck="false">
-      <div class="hint"><b>D</b> down · <b>U</b> up · <b>x</b> muted · <b>-</b> rest · space separates beats</div>
+      <div class="field">
+        <label for="strum">Strum pattern</label>
+        <input id="strum" type="text" value="${esc(g.strum || '')}" placeholder="D DU UDU" autocomplete="off" spellcheck="false">
+        <div class="hint"><b>D</b> down · <b>U</b> up · <b>x</b> muted · <b>-</b> rest</div>
+      </div>
     </div>
 
     <div class="field">
