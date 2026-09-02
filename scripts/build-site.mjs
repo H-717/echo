@@ -9,6 +9,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -46,12 +47,24 @@ writeFileSync(join(DIST, '404.html'), html);
 // Keep Pages from running the files through Jekyll.
 writeFileSync(join(DIST, '.nojekyll'), '');
 
-// Tie the service worker cache to the data build so a deploy invalidates it.
+// Tie the service worker cache to the content of everything it caches.
+//
+// Keying it on the data version alone was wrong: the app cache is cache-first,
+// so a release that only changed app code left every returning visitor pinned
+// to the previous JavaScript forever, because the key never moved.
 const { version } = JSON.parse(readFileSync(join(DATA, 'manifest.json'), 'utf8'));
 const swPath = join(DIST, 'sw.js');
-writeFileSync(swPath, readFileSync(swPath, 'utf8').replace(
-  /const VERSION = '[^']*';/, `const VERSION = 'sb-${version}';`
-));
+let sw = readFileSync(swPath, 'utf8');
+
+const shellFiles = [...sw.matchAll(/'\.\/([^']+)'/g)]
+  .map((m) => m[1])
+  .filter((f) => f && f !== '' && existsSync(join(DIST, f)));
+
+const hash = createHash('sha256').update(version);
+for (const f of shellFiles.sort()) hash.update(f).update(readFileSync(join(DIST, f)));
+const buildId = hash.digest('hex').slice(0, 12);
+
+writeFileSync(swPath, sw.replace(/const VERSION = '[^']*';/, `const VERSION = 'sb-${buildId}';`));
 
 // The manifest's start_url and scope have to match where the site actually is.
 const manPath = join(DIST, 'manifest.webmanifest');
