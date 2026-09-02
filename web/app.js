@@ -469,6 +469,14 @@ function layoutFit(el, song) {
   el.classList.add('cols');
 
   const MIN = 13, MAX = 46;
+
+  // Measure from a fixed baseline. Fitting leaves the page scroll-locked and
+  // padded; measuring the next fit in that state gives a slightly different
+  // answer, so repeated relayouts ratcheted the type down a pixel at a time
+  // and never recovered. Undo the previous outcome before measuring the next.
+  document.documentElement.classList.remove('locked');
+  song.style.paddingBottom = '0px';
+
   // Measure the dock rather than assuming its height, or the page ends up a
   // few pixels too tall and shows a scrollbar in a layout meant to fit exactly.
   window.scrollTo(0, 0);
@@ -1019,6 +1027,9 @@ function openSettings() {
     <p style="font-size:13.5px;color:var(--ink-2);margin:0">
       ${store.index.ids.length.toLocaleString()} songs in ${store.index.langCodes.length} languages are stored on this
       device, so the app works with no connection and never waits on a server to open a song.</p>
+    <div class="credit">
+      Built by <a href="https://github.com/H-717" target="_blank" rel="noopener">H-717</a>
+    </div>
     <div class="actions"><button class="btn" data-act="close">Done</button></div>`,
     (s) => {
       s.onclick = async (e) => {
