@@ -447,3 +447,7 @@ html.locked, html.locked body { overflow: hidden; height: 100dvh; }
   .row:hover, .ico:hover, .stepper button:hover { background: none; }
   .ico:hover { color: var(--ink-2); }
 }
+
+/* A control that cannot do anything should not look like it can. */
+.ico[disabled] { opacity: .35; cursor: default; }
+.ico[disabled]:hover { background: none; color: var(--ink-2); }

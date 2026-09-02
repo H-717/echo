@@ -402,6 +402,8 @@ function paintLyrics() {
 
   if (prefs.fit) layoutFit(el, song);
   else layoutNormal(el, song);
+
+  syncAutoscrollButton();
 }
 
 /** The reading layout: a comfortable measure, widened to columns when long. */
@@ -690,7 +692,7 @@ function paintDock() {
   const tuning = meta.key ? `
     <div class="stepper">
       <button data-act="tr-" aria-label="Transpose down">−</button>
-      <span class="val">${esc(key)}<small>key</small></span>
+      <span class="val">${esc(key)}<small>${current.capo ? 'shapes' : 'key'}</small></span>
       <button data-act="tr+" aria-label="Transpose up">+</button>
     </div>
     <div class="stepper">
@@ -703,7 +705,9 @@ function paintDock() {
     ${tuning}
     <span class="spacer"></span>
     ${meta.key ? `<button class="ico" data-act="chords" aria-pressed="${prefs.chords}" aria-label="Show chords"><svg viewBox="0 0 24 24">${ICONS.music}</svg></button>` : ''}
-    <button class="ico" data-act="autoscroll" aria-pressed="${!!autoscroll}" aria-label="Auto-scroll"><svg viewBox="0 0 24 24">${ICONS.scroll}</svg></button>
+    <button class="ico" data-act="autoscroll" aria-pressed="${!!autoscroll}"
+      ${canScroll() ? '' : 'disabled aria-disabled="true"'}
+      aria-label="${canScroll() ? 'Auto-scroll' : 'Auto-scroll (the whole song is already on screen)'}"><svg viewBox="0 0 24 24">${ICONS.scroll}</svg></button>
     <span class="secondary">
       <button class="ico" data-act="tempo" aria-label="Rhythm"><svg viewBox="0 0 24 24">${ICONS.tempo}</svg></button>
       <button class="ico" data-act="fit" aria-pressed="${prefs.fit}" aria-label="Fit song to screen"><svg viewBox="0 0 24 24">${ICONS.fit}</svg></button>
@@ -740,6 +744,7 @@ async function handleDockAction(act) {
     } else if (act === 'size') {
       openSizeSheet();
     } else if (act === 'autoscroll') {
+      if (!canScroll()) return;
       autoscroll ? stopAutoscroll() : startAutoscroll();
       paintDock();
     } else if (act === 'editchords') {
@@ -777,6 +782,25 @@ function openMoreSheet() {
         if (b.dataset.act !== 'close') handleDockAction(b.dataset.act);
       };
     });
+}
+
+/** Is there anything to scroll? Fit mode usually leaves nothing. */
+function canScroll() {
+  return document.documentElement.scrollHeight - document.documentElement.clientHeight > 4;
+}
+
+/**
+ * The dock is built before the lyrics are laid out, so whether the song
+ * scrolls is not known yet at that point. Settle the control afterwards.
+ */
+function syncAutoscrollButton() {
+  const b = document.querySelector('[data-act="autoscroll"]');
+  if (!b) return;
+  const ok = canScroll();
+  b.toggleAttribute('disabled', !ok);
+  b.setAttribute('aria-disabled', String(!ok));
+  b.setAttribute('aria-label', ok ? 'Auto-scroll' : 'Auto-scroll (the whole song is already on screen)');
+  if (!ok && autoscroll) { stopAutoscroll(); b.setAttribute('aria-pressed', 'false'); }
 }
 
 // ----------------------------------------------------------- autoscroll
