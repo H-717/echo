@@ -1,0 +1,13 @@
+{
+  "name": "Songbase",
+  "short_name": "Songbase",
+  "description": "Songbook for psalms, hymns, and spiritual songs",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fcfcfd",
+  "theme_color": "#fcfcfd",
+  "icons": [
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

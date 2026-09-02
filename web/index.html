@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<base href="/">
+<title>Songbase</title>
+<meta name="description" content="Songbook for psalms, hymns, and spiritual songs. 9,216 songs in 18 languages, with chords, offline.">
+<meta name="theme-color" content="#fcfcfd" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0f13" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="app.css">
+<link rel="preload" href="data/index.json" as="fetch" crossorigin>
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <span class="ico" aria-hidden="true">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+      </svg>
+    </span>
+    <div class="name">Songbase<small>Loading your songbook…</small></div>
+  </header>
+</div>
+<noscript>
+  <div style="max-width:640px;margin:40px auto;padding:0 20px;font:16px/1.6 system-ui,sans-serif">
+    <h1>Songbase</h1>
+    <p>Songbase keeps 9,216 songs on your device so it opens instantly and works offline.
+       That needs JavaScript switched on.</p>
+  </div>
+</noscript>
+</body>
+</html>

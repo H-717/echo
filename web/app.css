@@ -1,0 +1,377 @@
+/* Songbase. Read at arm's length, often in bad light, often while holding an
+   instrument. Big type, high contrast, wide tap targets, no web fonts. */
+
+:root {
+  --paper: #fcfcfd;
+  --surface: #ffffff;
+  --sunk: #f1f2f5;
+  --ink: #14161b;
+  --ink-2: #4a4f5c;
+  --ink-3: #82889a;
+  --rule: #e1e3ea;
+  --chord: #1a46d8;
+  --accent: #1a46d8;
+  --accent-ink: #ffffff;
+  --beat: #d64524;
+  --shadow: 0 1px 3px rgba(20, 22, 27, .08);
+  --tap: 44px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0d0f13;
+    --surface: #161920;
+    --sunk: #1c202a;
+    --ink: #edeef2;
+    --ink-2: #b4b9c6;
+    --ink-3: #7d8494;
+    --rule: #272c37;
+    --chord: #86a5ff;
+    --accent: #86a5ff;
+    --accent-ink: #0d0f13;
+    --beat: #ff8a66;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #0d0f13;
+  --surface: #161920;
+  --sunk: #1c202a;
+  --ink: #edeef2;
+  --ink-2: #b4b9c6;
+  --ink-3: #7d8494;
+  --rule: #272c37;
+  --chord: #86a5ff;
+  --accent: #86a5ff;
+  --accent-ink: #0d0f13;
+  --beat: #ff8a66;
+  --shadow: none;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  overscroll-behavior-y: none;
+}
+
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+a { color: inherit; text-decoration: none; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+/* ------------------------------------------------------------ chrome */
+
+.top {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px max(10px, env(safe-area-inset-left)) 6px max(10px, env(safe-area-inset-right));
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--rule);
+  min-height: 52px;
+}
+
+.ico {
+  width: var(--tap); height: var(--tap);
+  display: grid; place-items: center;
+  border-radius: 8px; color: var(--ink-2); flex: none;
+}
+.ico:hover { background: var(--sunk); color: var(--ink); }
+.ico[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.ico svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+.top .name {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 15px; font-weight: 600; letter-spacing: -.01em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 0 6px;
+}
+.top .name small { display: block; font-weight: 400; font-size: 12px; color: var(--ink-3); }
+
+/* ------------------------------------------------------------- list */
+
+.wrap { max-width: 780px; margin: 0 auto; padding: 0 14px 80px; }
+
+.searchbar { position: relative; margin: 14px 0 10px; }
+.searchbar input {
+  width: 100%; height: 46px; padding: 0 40px 0 40px;
+  font-size: 16px; color: var(--ink);
+  background: var(--sunk); border: 1px solid transparent; border-radius: 10px;
+}
+.searchbar input:focus { background: var(--surface); border-color: var(--accent); outline: none; }
+/* type="search" draws its own clear button; we supply a styled one, so hide
+   the native control rather than showing two crosses. */
+.searchbar input::-webkit-search-cancel-button,
+.searchbar input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+.searchbar .mag, .searchbar .clr {
+  position: absolute; top: 0; height: 46px; width: 40px;
+  display: grid; place-items: center; color: var(--ink-3);
+}
+.searchbar .mag { left: 0; pointer-events: none; }
+.searchbar .clr { right: 0; font-size: 20px; }
+.searchbar svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; }
+
+.filters { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 10px; scrollbar-width: none; }
+.filters::-webkit-scrollbar { display: none; }
+.chipbtn {
+  flex: none; padding: 6px 12px; border-radius: 999px;
+  background: var(--sunk); color: var(--ink-2);
+  font-size: 13px; font-weight: 500; white-space: nowrap;
+}
+.chipbtn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+.count { font-size: 12.5px; color: var(--ink-3); padding: 2px 2px 8px; }
+
+.rows { display: flex; flex-direction: column; }
+.row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 11px 10px; border-radius: 8px;
+  border-bottom: 1px solid var(--rule);
+  min-height: var(--tap);
+}
+.row:hover { background: var(--sunk); }
+.row .t { flex: 1 1 auto; font-size: 17px; line-height: 1.3; }
+.row .n { font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; flex: none; }
+.row .snip { display: block; font-size: 13px; color: var(--ink-3); margin-top: 3px; }
+.row .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--chord); flex: none; opacity: .8; }
+
+.groupname {
+  font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-3); padding: 18px 10px 6px;
+}
+
+.empty { text-align: center; color: var(--ink-3); padding: 48px 20px; font-size: 15px; }
+
+/* ------------------------------------------------------------- song */
+
+.song { max-width: var(--measure, 720px); margin: 0 auto; padding: 0 16px 140px; }
+
+/* Fit mode fills the screen instead of leaving a narrow column marooned in the
+   middle of a wide display, and sizes the song so nobody has to scroll while
+   the room is singing. */
+.song.fit { max-width: none; padding-bottom: 0; }
+.song.fit .songhead { padding: 10px 0 6px; }
+.song.fit .songhead h1 { font-size: clamp(19px, 2.2vw, 26px); }
+
+.songhead { padding: 18px 0 10px; }
+.songhead h1 { font-size: clamp(22px, 4.4vw, 30px); line-height: 1.15; letter-spacing: -.02em; margin: 0 0 6px; text-wrap: balance; }
+.songhead .meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--ink-3); }
+.songhead .meta b { color: var(--ink-2); font-weight: 500; }
+
+/* Lyrics. Font size and measure are user-controlled; columns appear only when
+   there is genuinely room, and never split a stanza. */
+.lyrics {
+  font-size: var(--lyric-size, 17px);
+  line-height: 1.45;
+  margin-top: 6px;
+}
+.lyrics.cols { column-count: var(--cols, 2); column-gap: 44px; }
+.lyrics.cols .st { break-inside: avoid; }
+.lyrics.cols.ruled { column-rule: 1px solid var(--rule); }
+
+.st { display: flex; gap: 12px; margin: 0 0 20px; }
+.st .no {
+  flex: none; width: 14px; text-align: right;
+  color: var(--ink-3); font-size: .82em; font-variant-numeric: tabular-nums;
+  padding-top: .1em;
+}
+.st.refrain .bd { padding-left: 14px; border-left: 2px solid var(--rule); }
+.st .bd { flex: 1 1 auto; min-width: 0; }
+
+.ln { min-height: 1.45em; }
+.ln.blank { min-height: .7em; }
+
+/* A word is one unwrappable unit carrying its own chords, so a chord can never
+   be separated from the syllable it belongs to, at any width. */
+.wd { display: inline-block; white-space: nowrap; vertical-align: bottom; }
+.pc { display: inline-grid; grid-template-rows: auto auto; justify-items: start; vertical-align: bottom; }
+.cd {
+  color: var(--chord); font-weight: 600;
+  font-size: .8em; line-height: 1.35;
+  padding-right: .55em; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* A piece with no chord must add no width, or a chord landing mid-word
+   ("j[G]oy") would push the word apart into "j oy". */
+.cd:empty { padding-right: 0; }
+/* A chord past the last character still needs a text row to sit on. */
+.tx:empty::after { content: "\200b"; }
+.tx { line-height: 1.35; }
+
+/* Chord rows only exist on lines that have chords, so plain verses stay tight. */
+.ln.chorded { margin-bottom: .18em; }
+
+.lyrics.nochords .cd { display: none; }
+
+/* --------------------------------------------------------- groove bar */
+
+.groove {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 10px 12px; margin: 12px 0 4px;
+  background: var(--sunk); border-radius: 10px;
+  font-size: 14px;
+}
+.groove .g { display: inline-flex; align-items: baseline; gap: 5px; color: var(--ink-2); }
+.groove .g b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.groove .sep { width: 1px; height: 16px; background: var(--rule); }
+.groove .src {
+  font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 3px; background: var(--surface); color: var(--ink-3);
+}
+.groove .src.mine { background: var(--accent); color: var(--accent-ink); }
+.groove .spacer { flex: 1 1 auto; }
+
+.play {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 34px; padding: 0 13px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-ink);
+  font-size: 13.5px; font-weight: 600;
+}
+.play[aria-pressed="true"] { background: var(--beat); }
+.play svg { width: 14px; height: 14px; fill: currentColor; stroke: none; }
+
+.strum { display: flex; gap: 3px; align-items: flex-end; }
+.strum i { font-style: normal; font-size: 15px; line-height: 1; color: var(--ink-2); }
+.strum i.muted { color: var(--ink-3); }
+.strum i.rest { color: var(--ink-3); opacity: .5; }
+.strum .gap { width: 7px; }
+
+/* Beat pulse — the visual half of the count-in. */
+.beats { display: flex; gap: 5px; }
+.beats span {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--rule); transition: background .06s, transform .06s;
+}
+.beats span.on { background: var(--beat); transform: scale(1.35); }
+.beats span.counting.on { background: var(--ink); }
+
+/* ------------------------------------------------------------- dock */
+
+.dock {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--rule);
+  padding: 6px max(8px, env(safe-area-inset-left)) max(6px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-right));
+}
+.dockrow { max-width: 780px; margin: 0 auto; display: flex; align-items: center; gap: 4px; }
+.dockrow .spacer { flex: 1 1 auto; }
+
+.stepper { display: flex; align-items: center; gap: 2px; background: var(--sunk); border-radius: 9px; padding: 2px; }
+.stepper button { width: 38px; height: 38px; border-radius: 7px; display: grid; place-items: center; font-size: 19px; color: var(--ink-2); }
+.stepper button:hover { background: var(--surface); color: var(--ink); }
+.stepper .val {
+  min-width: 62px; text-align: center; font-size: 14px; font-weight: 600;
+  font-variant-numeric: tabular-nums; padding: 0 4px;
+}
+.stepper .val small { display: block; font-size: 9.5px; font-weight: 500; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); }
+
+/* ------------------------------------------------------------ panels */
+
+.sheet {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(10, 12, 16, .4);
+  display: grid; align-items: end; justify-items: center;
+}
+.sheet[hidden] { display: none; }
+.sheetbody {
+  width: 100%; max-width: 560px;
+  background: var(--surface); color: var(--ink);
+  border-radius: 16px 16px 0 0;
+  padding: 8px 18px max(22px, env(safe-area-inset-bottom));
+  max-height: 86vh; overflow-y: auto;
+  box-shadow: 0 -8px 40px rgba(0, 0, 0, .2);
+}
+.grabber { width: 38px; height: 4px; border-radius: 99px; background: var(--rule); margin: 8px auto 14px; }
+.sheetbody h2 { font-size: 17px; margin: 0 0 14px; letter-spacing: -.01em; }
+.sheetbody h3 {
+  font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3);
+  margin: 20px 0 8px; font-weight: 600;
+}
+
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 5px; }
+.field input[type="text"], .field input[type="number"], .field select, .field textarea {
+  width: 100%; min-height: var(--tap); padding: 9px 11px;
+  font: inherit; font-size: 15px; color: var(--ink);
+  background: var(--sunk); border: 1px solid var(--rule); border-radius: 9px;
+}
+.field textarea { min-height: 190px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.5; white-space: pre; }
+.field .hint { font-size: 12px; color: var(--ink-3); margin-top: 5px; }
+
+.opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.opt {
+  padding: 8px 13px; border-radius: 8px; background: var(--sunk);
+  font-size: 14px; color: var(--ink-2); min-height: 38px;
+}
+.opt[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
+.actions { display: flex; gap: 8px; margin-top: 20px; }
+.btn {
+  flex: 1 1 auto; min-height: var(--tap); border-radius: 10px;
+  background: var(--sunk); color: var(--ink); font-size: 15px; font-weight: 600;
+  display: grid; place-items: center;
+}
+.btn.primary { background: var(--accent); color: var(--accent-ink); }
+.btn.quiet { background: none; color: var(--ink-3); font-weight: 500; }
+
+/* ------------------------------------------------------------ status */
+
+.sync {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 74px; z-index: 25;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 14px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--rule); box-shadow: var(--shadow);
+  font-size: 12.5px; color: var(--ink-2);
+}
+.sync[hidden] { display: none; }
+.sync .bar { width: 54px; height: 3px; border-radius: 2px; background: var(--rule); overflow: hidden; }
+.sync .bar i { display: block; height: 100%; background: var(--accent); transition: width .2s; }
+
+@media print {
+  .top, .dock, .sync, .groove .play, .sheet { display: none !important; }
+  body { background: #fff; color: #000; }
+  .song { max-width: none; padding: 0; }
+  .lyrics { columns: 2; column-gap: 34px; font-size: 12pt; }
+  .st { break-inside: avoid; }
+  .cd { color: #000; }
+}
+
+/* Fit mode that genuinely fits shows no scrollbar. */
+html.locked, html.locked body { overflow: hidden; height: 100dvh; }
+
+/* Phones: one column, tighter chrome, and a dock that clears the home bar. */
+@media (max-width: 560px) {
+  .wrap { padding: 0 12px 90px; }
+  .song { padding: 0 12px 120px; }
+  .songhead h1 { font-size: clamp(20px, 5.4vw, 26px); }
+  .top .name { font-size: 14px; }
+  .dockrow { gap: 2px; }
+  .stepper .val { min-width: 50px; font-size: 13px; }
+  .stepper button { width: 34px; height: 38px; }
+  .groove { font-size: 13px; gap: 6px; }
+  .lyrics.cols { column-count: 1; }
+  .sheetbody { max-height: 80dvh; }
+}
+
+/* Touch devices have no hover; don't leave rows looking permanently active. */
+@media (hover: none) {
+  .row:hover, .ico:hover, .stepper button:hover { background: none; }
+  .ico:hover { color: var(--ink-2); }
+}

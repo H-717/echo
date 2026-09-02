@@ -1,0 +1,800 @@
+// Songbase — app shell, router and views.
+//
+// Reads are local: once the first sync lands, moving between songs never waits
+// on the network. Everything a person changes here (key, capo, groove, chord
+// tweaks) is stored per-device and costs nothing to keep.
+
+import { Store, slug } from './store.js';
+import { renderSong } from './render.js';
+import { transposeKey } from './chords.js';
+import * as G from './groove.js';
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const ICONS = {
+  back: '<path d="M15 18l-6-6 6-6"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
+  music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  type: '<path d="M4 7V5h16v2M9 19h6M12 5v14"/>',
+  cols: '<rect x="3" y="4" width="7" height="16" rx="1"/><rect x="14" y="4" width="7" height="16" rx="1"/>',
+  scroll: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+  fit: '<path d="M4 9V5a1 1 0 011-1h4M20 9V5a1 1 0 00-1-1h-4M4 15v4a1 1 0 001 1h4M20 15v4a1 1 0 01-1 1h-4"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-2.7 1.1V21a2 2 0 11-4 0v-.1A1.6 1.6 0 007.5 19a1.6 1.6 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.6 1.6 0 00-1.1-2.7H1a2 2 0 110-4h.1A1.6 1.6 0 002.6 7.5a1.6 1.6 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.6 1.6 0 001.8.3H7a1.6 1.6 0 001-1.5V1a2 2 0 114 0v.1a1.6 1.6 0 001 1.5 1.6 1.6 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.6 1.6 0 00-.3 1.8V7a1.6 1.6 0 001.5 1H21a2 2 0 110 4h-.1a1.6 1.6 0 00-1.5 1z"/>',
+  play: '<path d="M6 4l14 8-14 8z"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
+};
+const icon = (n, cls = 'ico') => `<span class="${cls}"><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg></span>`;
+
+// Everything is addressed relative to where the app is deployed, so it works
+// identically at a domain root and under a project subpath.
+const BASE = new URL(document.baseURI).pathname.replace(/\/*$/, '/');
+const path = (p) => BASE + String(p).replace(/^\/+/, '');
+
+const app = $('#app');
+const store = new Store(BASE);
+const metro = new G.Metronome();
+const tapper = new G.TapTempo();
+
+let prefs = { size: 17, chords: true, cols: 'auto', fit: true, langs: null, theme: null };
+let current = null;   // { meta, lyrics, local, steps, capo }
+let autoscroll = null;
+
+// ------------------------------------------------------------------ boot
+
+(async function boot() {
+  await store.init();
+  prefs = { ...prefs, ...(await store.prefs()) };
+  applyTheme();
+
+  store.on((ev) => { if (ev.type === 'sync') renderSyncStatus(ev.state); });
+
+  window.addEventListener('popstate', route);
+  document.addEventListener('click', onGlobalClick);
+  route();
+
+  // Cache-first is right in production and wrong in development, where it
+  // would keep serving the last build.
+  const isDev = ['localhost', '127.0.0.1'].includes(location.hostname);
+  if ('serviceWorker' in navigator && !isDev) {
+    navigator.serviceWorker.register(path('sw.js'), { scope: BASE }).catch(() => {});
+  }
+})();
+
+function applyTheme() {
+  if (prefs.theme) document.documentElement.setAttribute('data-theme', prefs.theme);
+  else document.documentElement.removeAttribute('data-theme');
+}
+
+// ---------------------------------------------------------------- router
+
+function go(path, replace = false) {
+  history[replace ? 'replaceState' : 'pushState']({}, '', path);
+  route();
+}
+
+function route() {
+  stopAutoscroll();
+  metro.stop();
+  document.documentElement.classList.remove('locked');
+  const rest = location.pathname.startsWith(BASE)
+    ? location.pathname.slice(BASE.length)
+    : location.pathname.replace(/^\/+/, '');
+  const m = /^(\d+)/.exec(rest);
+  if (m) renderSongView(Number(m[1]));
+  else renderList();
+}
+
+function onGlobalClick(e) {
+  const a = e.target.closest('a[data-nav]');
+  if (a && !e.metaKey && !e.ctrlKey && a.origin === location.origin) {
+    e.preventDefault();
+    go(a.getAttribute('href'));
+  }
+}
+
+// ------------------------------------------------------------ list view
+
+let listState = { q: '', lyricHits: [], lyricPending: false };
+
+function renderList() {
+  const params = new URLSearchParams(location.search);
+  listState.q = params.get('q') || '';
+
+  document.title = 'Songbase';
+  app.innerHTML = `
+    <header class="top">
+      <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24">${ICONS.music}</svg></span>
+      <div class="name">Songbase<small>${store.index.ids.length.toLocaleString()} songs · ${store.index.langCodes.length} languages</small></div>
+      <button class="ico" data-act="settings" aria-label="Settings"><svg viewBox="0 0 24 24">${ICONS.gear}</svg></button>
+    </header>
+    <div class="wrap">
+      <div class="searchbar">
+        <span class="mag"><svg viewBox="0 0 24 24">${ICONS.search}</svg></span>
+        <input id="q" type="search" inputmode="search" autocomplete="off" spellcheck="false"
+               placeholder="Search titles and lyrics" value="${esc(listState.q)}" aria-label="Search songs">
+        <button class="clr" data-act="clear" aria-label="Clear search" ${listState.q ? '' : 'hidden'}>×</button>
+      </div>
+      <div class="filters" id="langs"></div>
+      <div id="results"></div>
+    </div>
+    <div class="sync" hidden></div>`;
+
+  renderLangFilters();
+  const input = $('#q');
+  input.addEventListener('input', onSearchInput);
+  renderResults();
+  renderSyncStatus(store.syncState);
+}
+
+function activeLangs() {
+  return prefs.langs && prefs.langs.length ? new Set(prefs.langs) : null;
+}
+
+function renderLangFilters() {
+  const el = $('#langs');
+  if (!el) return;
+  const active = prefs.langs || [];
+  const counts = {};
+  const x = store.index;
+  for (const li of x.langs) counts[x.langCodes[li]] = (counts[x.langCodes[li]] || 0) + 1;
+  const langs = [...x.langCodes].sort((a, b) => counts[b] - counts[a]);
+
+  el.innerHTML = `<button class="chipbtn" data-lang="" aria-pressed="${active.length === 0}">All</button>` +
+    langs.map((l) => `<button class="chipbtn" data-lang="${esc(l)}" aria-pressed="${active.includes(l)}">${esc(l)} <span style="opacity:.6">${counts[l]}</span></button>`).join('');
+
+  el.onclick = async (e) => {
+    const b = e.target.closest('[data-lang]');
+    if (!b) return;
+    const l = b.dataset.lang;
+    let next = prefs.langs || [];
+    if (!l) next = [];
+    else next = next.includes(l) ? next.filter((x) => x !== l) : [...next, l];
+    prefs = await store.setPrefs({ langs: next });
+    renderLangFilters();
+    renderResults();
+  };
+}
+
+let searchTimer = null;
+function onSearchInput(e) {
+  listState.q = e.target.value;
+  $('.clr').hidden = !listState.q;
+  const url = listState.q ? path(`?q=${encodeURIComponent(listState.q)}`) : BASE;
+  history.replaceState({}, '', url);
+
+  // Titles are matched instantly from memory on every keystroke; the full-text
+  // pass is debounced and runs against IndexedDB, so typing never stalls.
+  listState.lyricHits = [];
+  renderResults();
+
+  clearTimeout(searchTimer);
+  if (listState.q.trim().length >= 3) {
+    listState.lyricPending = true;
+    searchTimer = setTimeout(runLyricSearch, 220);
+  } else {
+    listState.lyricPending = false;
+  }
+}
+
+async function runLyricSearch() {
+  const q = listState.q;
+  const titleHits = store.searchTitles(q, { langs: activeLangs(), limit: 200 });
+  const exclude = new Set(titleHits.rows.map((r) => r.id));
+  const hits = await store.searchLyrics(q, { exclude });
+  if (q !== listState.q) return;    // a newer keystroke won
+  listState.lyricHits = store.resolveHits(hits, activeLangs());
+  listState.lyricPending = false;
+  renderResults();
+}
+
+function rowHtml(s, extra = '') {
+  const ref = s.refs.length ? `<span class="n">${esc(store.bookName(s.refs[0][0]))} ${esc(s.refs[0][1])}</span>` : '';
+  return `<a class="row" data-nav href="${path(`${s.id}/${s.slug}`)}">
+    <span class="t">${esc(s.title)}${extra}</span>
+    ${s.key ? `<span class="n">${esc(s.key)}</span>` : ''}
+    ${ref}
+  </a>`;
+}
+
+function renderResults() {
+  const el = $('#results');
+  if (!el) return;
+  const { rows, total } = store.searchTitles(listState.q, { langs: activeLangs(), limit: 200 });
+
+  if (!rows.length && !listState.lyricHits.length) {
+    el.innerHTML = `<div class="empty">${listState.q ? `Nothing matches “${esc(listState.q)}”.` : 'No songs in the selected languages.'}</div>`;
+    return;
+  }
+
+  let html = `<div class="count">${total.toLocaleString()} ${total === 1 ? 'title' : 'titles'}${total > rows.length ? ` · showing ${rows.length}` : ''}</div>`;
+  html += `<div class="rows">${rows.map((s) => rowHtml(s)).join('')}</div>`;
+
+  if (listState.lyricHits.length) {
+    html += `<div class="groupname">Found in the words</div><div class="rows">` +
+      listState.lyricHits.map((s) => rowHtml(s, `<span class="snip">${esc(s.snippet)}</span>`)).join('') + '</div>';
+  } else if (listState.lyricPending) {
+    html += `<div class="groupname">Searching the words…</div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderSyncStatus(state) {
+  const el = $('.sync');
+  if (!el) return;
+  if (!state || state.phase !== 'syncing') { el.hidden = true; return; }
+  const pct = state.total ? Math.round(100 * state.done / state.total) : 0;
+  el.hidden = false;
+  el.innerHTML = `<span>Saving songs for offline</span><span class="bar"><i style="width:${pct}%"></i></span>`;
+}
+
+// ------------------------------------------------------------ song view
+
+async function renderSongView(id) {
+  const meta = store.meta(id);
+  if (!meta) { go(BASE, true); return; }
+
+  document.title = meta.title;
+  if (location.pathname !== path(`${id}/${meta.slug}`)) {
+    history.replaceState({}, '', path(`${id}/${meta.slug}`));
+  }
+
+  // Paint the frame immediately from the in-memory index, then fill the body.
+  app.innerHTML = `
+    <header class="top">
+      <a class="ico" data-nav href="${BASE}" aria-label="All songs"><svg viewBox="0 0 24 24">${ICONS.back}</svg></a>
+      <div class="name">${esc(meta.title)}<small>${esc(meta.lang)}${meta.refs.length ? ' · ' + esc(store.bookName(meta.refs[0][0])) + ' ' + esc(meta.refs[0][1]) : ''}</small></div>
+      <button class="ico" data-act="settings" aria-label="Settings"><svg viewBox="0 0 24 24">${ICONS.gear}</svg></button>
+    </header>
+    <div class="song" id="song"></div>
+    <div class="dock" id="dock"></div>
+    <div class="sheet" id="sheet" hidden></div>`;
+
+  const [body, local] = await Promise.all([store.lyrics(id), store.getLocal(id)]);
+  if (!body) { $('#song').innerHTML = `<div class="empty">This song hasn’t downloaded yet.</div>`; return; }
+
+  current = {
+    meta, local: local || {},
+    lyrics: body.text, edited: body.edited,
+    steps: (local && local.steps) || 0,
+    capo: (local && local.capo) || 0,
+  };
+  paintSong();
+}
+
+/** Chords as written = original + transpose − capo. Sounding key = original + transpose. */
+function shownSteps() { return current.steps - current.capo; }
+
+function paintSong() {
+  const { meta } = current;
+  const groove = G.normalize(current.local.groove);
+  const sounding = meta.key ? transposeKey(meta.key, current.steps, meta.flat ? 'flat' : 'sharp') : null;
+  const played = meta.key ? transposeKey(meta.key, shownSteps(), meta.flat ? 'flat' : 'sharp') : null;
+
+  const bits = [];
+  if (meta.refs.length) bits.push(meta.refs.map((r) => `<b>${esc(store.bookName(r[0]))} ${esc(r[1])}</b>`).join(' · '));
+  bits.push(esc(meta.lang));
+  if (sounding) {
+    bits.push(current.capo
+      ? `Key <b>${esc(sounding)}</b> · capo ${current.capo} · play <b>${esc(played)}</b> shapes`
+      : `Key <b>${esc(sounding)}</b>`);
+  }
+  if (current.edited) bits.push('<b>your edit</b>');
+
+  $('#song').innerHTML = `
+    <div class="songhead">
+      <h1>${esc(meta.title)}</h1>
+      <div class="meta">${bits.map((b) => `<span>${b}</span>`).join('')}</div>
+    </div>
+    ${grooveBarHtml(groove)}
+    <div class="lyrics" id="lyrics"></div>`;
+
+  paintDock();
+  paintLyrics();
+  wireGrooveBar();
+}
+
+function paintLyrics() {
+  const el = $('#lyrics');
+  if (!el) return;
+  const song = document.querySelector('.song');
+
+  el.innerHTML = renderSong(current.lyrics, {
+    steps: shownSteps(),
+    flat: current.meta.flat,
+    showChords: prefs.chords,
+  });
+  el.classList.toggle('nochords', !prefs.chords);
+
+  if (prefs.fit) layoutFit(el, song);
+  else layoutNormal(el, song);
+}
+
+/** The reading layout: a comfortable measure, widened to columns when long. */
+function layoutNormal(el, song) {
+  document.documentElement.classList.remove('locked');
+  song.classList.remove('fit');
+  el.classList.remove('cols', 'ruled');
+  el.style.setProperty('--lyric-size', prefs.size + 'px');
+  song.style.setProperty('--measure', '720px');
+
+  let cols = prefs.cols === 'on';
+  if (prefs.cols === 'auto' && viewportW() >= 860) {
+    const room = viewportH() - el.getBoundingClientRect().top - 84;
+    cols = el.scrollHeight > room;
+  }
+  if (cols && viewportW() >= 860) {
+    el.classList.add('cols');
+    el.style.setProperty('--cols', '2');
+    song.style.setProperty('--measure', '1160px');
+  }
+}
+
+/**
+ * Fit the whole song on one screen.
+ *
+ * Nobody should have to stand at a laptop scrolling while a room sings, so we
+ * search for the layout that shows the entire song at the largest readable
+ * type: try each sensible column count and binary-search the biggest font size
+ * that still fits the available height. More columns are only worth taking if
+ * they buy bigger text.
+ */
+// On phones the URL bar hides and shows, changing innerHeight mid-scroll.
+// visualViewport is the honest number for "how much can the reader see".
+const viewportH = () => Math.round(window.visualViewport?.height || window.innerHeight);
+const viewportW = () => Math.round(window.visualViewport?.width || window.innerWidth);
+
+let lastFitSize = 22;   // a warm starting guess makes the common case 2 probes
+
+// Reading a laid-out height costs a synchronous reflow (~15ms), which is the
+// entire cost of opening a song — the data read and render together are under
+// 4ms. Remembering what fitted last time turns a revisit into a single probe.
+const fitCache = new Map();
+const fitKey = () => `${current.meta.id}:${viewportW()}x${viewportH()}` +
+  `:${prefs.chords ? 1 : 0}:${shownSteps()}`;
+
+function layoutFit(el, song) {
+  song.classList.add('fit');
+  el.classList.add('cols');
+  song.style.setProperty('--measure', 'none');
+
+  const MIN = 13, MAX = 46;
+  // Measure the dock rather than assuming its height, or the page ends up a
+  // few pixels too tall and shows a scrollbar in a layout meant to fit exactly.
+  window.scrollTo(0, 0);
+  const dock = document.querySelector('.dock');
+  const dockH = dock ? Math.ceil(dock.getBoundingClientRect().height) : 0;
+  const avail = () => viewportH() - Math.ceil(el.getBoundingClientRect().top) - dockH - 10;
+
+  // Chord lines are long, and a column too narrow to hold one wraps it — which
+  // is the exact ugliness this layout exists to avoid. Give chorded songs a
+  // much wider minimum column than plain lyrics.
+  const chorded = !!el.querySelector('.ln.chorded');
+  const minCol = chorded ? 430 : 300;
+  const maxCols = Math.max(1, Math.min(3, Math.floor((viewportW() - 32) / minCol)));
+
+  // Reading a laid-out height forces a synchronous reflow (~14ms on a full
+  // song), so binary-searching every size would cost hundreds of milliseconds.
+  // Height is close to linear in font size, so predict and correct instead.
+  const clamp = (n) => Math.max(MIN, Math.min(MAX, Math.floor(n)));
+  const apply = (cols, size) => {
+    el.style.setProperty('--cols', String(cols));
+    el.style.setProperty('--lyric-size', size + 'px');
+  };
+  // A multi-column box that can't hold its content spills into extra columns
+  // sideways rather than growing taller, so height alone never reports the
+  // overflow. Width is the signal that actually catches it.
+  const overflows = (room) => el.scrollHeight > room + 1 || el.scrollWidth > el.clientWidth + 1;
+
+  const room = avail();
+  const key = fitKey();
+  const cached = fitCache.get(key);
+
+  if (cached) {
+    apply(cached.cols, cached.size);
+    if (!overflows(room)) {
+      el.classList.toggle('ruled', cached.cols > 1);
+      el.dataset.overflowing = String(cached.over);
+      document.documentElement.classList.toggle('locked', !cached.over);
+      return;
+    }
+    fitCache.delete(key);   // conditions moved; fall through and re-fit
+  }
+
+  let cols = maxCols, size = clamp(lastFitSize);
+  apply(cols, size);
+
+  // Shrink until it genuinely fits, then try to grow back into any slack.
+  for (let i = 0; i < 6 && overflows(room) && size > MIN; i++) {
+    const ratio = room / Math.max(1, el.scrollHeight);
+    size = clamp(Math.min(size - 1, Math.floor(size * ratio)));
+    apply(cols, size);
+  }
+  for (let i = 0; i < 4 && size < MAX; i++) {
+    apply(cols, size + 1);
+    if (overflows(room)) { apply(cols, size); break; }
+    size++;
+  }
+
+  // Prefer the fewest columns that still holds this size — less eye travel.
+  while (cols > 1) {
+    apply(cols - 1, size);
+    if (overflows(room)) { apply(cols, size); break; }
+    cols--;
+  }
+
+  lastFitSize = size;
+  el.classList.toggle('ruled', cols > 1);
+
+  // If even the smallest readable type won't fit, the song is genuinely longer
+  // than this screen. Let it scroll rather than shrink past legibility — and
+  // never lock scrolling in that case, which would simply cut the song off.
+  const stillOver = overflows(room);
+  el.dataset.overflowing = String(stillOver);
+  document.documentElement.classList.toggle('locked', !stillOver);
+
+  if (fitCache.size > 200) fitCache.clear();
+  fitCache.set(key, { cols, size, over: stillOver });
+}
+
+// ------------------------------------------------------------- groove UI
+
+function grooveBarHtml(g) {
+  if (G.isEmpty(g)) {
+    return `<div class="groove"><span class="g" style="color:var(--ink-3)">No rhythm noted yet</span>
+      <span class="spacer"></span>
+      <button class="btn quiet" data-act="groove" style="flex:none;min-height:34px;padding:0 12px">Add one</button></div>`;
+  }
+  const strum = G.parseStrum(g.strum);
+  const parts = [];
+  if (g.meter) parts.push(`<span class="g"><b>${esc(g.meter)}</b></span>`);
+  if (g.bpm) parts.push(`<span class="g"><b>${g.bpm}</b> bpm</span>`);
+  if (g.feel) parts.push(`<span class="g">${esc(G.FEELS[g.feel])}</span>`);
+  if (strum) {
+    parts.push(`<span class="strum">${strum.map((t) =>
+      t.gap ? '<span class="gap"></span>'
+        : t.rest ? '<i class="rest">·</i>'
+          : `<i class="${t.muted ? 'muted' : ''}">${t.dir === 'down' ? '↓' : '↑'}</i>`).join('')}</span>`);
+  }
+  if (g.note) parts.push(`<span class="g" style="color:var(--ink-3)">${esc(g.note)}</span>`);
+
+  const beats = g.bpm ? `<span class="beats" id="beats">${Array.from({ length: G.beatsPerBar(g.meter) },
+    () => '<span></span>').join('')}</span>` : '';
+
+  return `<div class="groove">
+    <span class="src mine">yours</span>
+    ${parts.join('<span class="sep"></span>')}
+    <span class="spacer"></span>
+    ${beats}
+    ${g.bpm ? `<button class="play" data-act="metro" aria-pressed="false"><svg viewBox="0 0 24 24">${ICONS.play}</svg> Count in</button>` : ''}
+    <button class="ico" data-act="groove" aria-label="Edit rhythm"><svg viewBox="0 0 24 24">${ICONS.edit}</svg></button>
+  </div>`;
+}
+
+function wireGrooveBar() {
+  const bar = $('.groove');
+  if (!bar) return;
+  bar.onclick = (e) => {
+    const btn = e.target.closest('[data-act]');
+    if (!btn) return;
+    if (btn.dataset.act === 'groove') openGrooveSheet();
+    if (btn.dataset.act === 'metro') toggleMetronome(btn);
+  };
+}
+
+function toggleMetronome(btn) {
+  const g = G.normalize(current.local.groove);
+  if (metro.running) {
+    metro.stop();
+    btn.setAttribute('aria-pressed', 'false');
+    btn.innerHTML = `<svg viewBox="0 0 24 24">${ICONS.play}</svg> Count in`;
+    document.querySelectorAll('#beats span').forEach((s) => s.classList.remove('on', 'counting'));
+    return;
+  }
+  const dots = [...document.querySelectorAll('#beats span')];
+  metro.onBeat = ({ inBar, counting }) => {
+    dots.forEach((d, i) => {
+      d.classList.toggle('on', i === inBar);
+      d.classList.toggle('counting', counting);
+    });
+  };
+  if (!metro.start(g.bpm, g.meter)) return;
+  btn.setAttribute('aria-pressed', 'true');
+  btn.innerHTML = `<svg viewBox="0 0 24 24">${ICONS.stop}</svg> Stop`;
+}
+
+// ----------------------------------------------------------------- dock
+
+function paintDock() {
+  const d = $('#dock');
+  if (!d) return;
+  const { meta } = current;
+  const key = meta.key ? transposeKey(meta.key, shownSteps(), meta.flat ? 'flat' : 'sharp') : null;
+
+  // Transpose and capo only mean something when the song actually has chords.
+  const tuning = meta.key ? `
+    <div class="stepper">
+      <button data-act="tr-" aria-label="Transpose down">−</button>
+      <span class="val">${esc(key)}<small>key</small></span>
+      <button data-act="tr+" aria-label="Transpose up">+</button>
+    </div>
+    <div class="stepper">
+      <button data-act="capo-" aria-label="Capo down">−</button>
+      <span class="val">${current.capo || '—'}<small>capo</small></span>
+      <button data-act="capo+" aria-label="Capo up">+</button>
+    </div>` : '';
+
+  d.innerHTML = `<div class="dockrow">
+    ${tuning}
+    <span class="spacer"></span>
+    ${meta.key ? `<button class="ico" data-act="chords" aria-pressed="${prefs.chords}" aria-label="Show chords"><svg viewBox="0 0 24 24">${ICONS.music}</svg></button>` : ''}
+    <button class="ico" data-act="fit" aria-pressed="${prefs.fit}" aria-label="Fit song to screen"><svg viewBox="0 0 24 24">${ICONS.fit}</svg></button>
+    <button class="ico" data-act="size" aria-label="Text size"><svg viewBox="0 0 24 24">${ICONS.type}</svg></button>
+    <button class="ico" data-act="autoscroll" aria-pressed="${!!autoscroll}" aria-label="Auto-scroll"><svg viewBox="0 0 24 24">${ICONS.scroll}</svg></button>
+    <button class="ico" data-act="editchords" aria-label="Adjust chords"><svg viewBox="0 0 24 24">${ICONS.edit}</svg></button>
+  </div>`;
+
+  d.onclick = async (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const act = b.dataset.act;
+
+    if (act === 'tr+' || act === 'tr-') {
+      current.steps = Math.max(-11, Math.min(11, current.steps + (act === 'tr+' ? 1 : -1)));
+      await store.setLocal(current.meta.id, { steps: current.steps || null });
+      paintSong();
+    } else if (act === 'capo+' || act === 'capo-') {
+      current.capo = Math.max(0, Math.min(11, current.capo + (act === 'capo+' ? 1 : -1)));
+      await store.setLocal(current.meta.id, { capo: current.capo || null });
+      paintSong();
+    } else if (act === 'chords') {
+      prefs = await store.setPrefs({ chords: !prefs.chords });
+      paintDock(); paintLyrics();
+    } else if (act === 'fit') {
+      prefs = await store.setPrefs({ fit: !prefs.fit });
+      paintDock(); paintLyrics();
+    } else if (act === 'size') {
+      openSizeSheet();
+    } else if (act === 'autoscroll') {
+      autoscroll ? stopAutoscroll() : startAutoscroll();
+      paintDock();
+    } else if (act === 'editchords') {
+      openEditSheet();
+    }
+  };
+}
+
+// ----------------------------------------------------------- autoscroll
+
+function startAutoscroll() {
+  const speed = prefs.scroll || 22;   // pixels per second
+  let last = performance.now(), acc = 0;
+  const step = (now) => {
+    if (!autoscroll) return;
+    acc += (now - last) * speed / 1000;
+    last = now;
+    if (acc >= 1) { window.scrollBy(0, Math.floor(acc)); acc -= Math.floor(acc); }
+    if (window.scrollY + window.innerHeight >= document.body.scrollHeight - 2) return stopAutoscroll();
+    autoscroll = requestAnimationFrame(step);
+  };
+  autoscroll = requestAnimationFrame(step);
+}
+
+function stopAutoscroll() {
+  if (autoscroll) cancelAnimationFrame(autoscroll);
+  autoscroll = null;
+  const b = document.querySelector('[data-act="autoscroll"]');
+  if (b) b.setAttribute('aria-pressed', 'false');
+}
+
+// --------------------------------------------------------------- sheets
+
+function openSheet(html, wire) {
+  const s = $('#sheet');
+  s.innerHTML = `<div class="sheetbody"><div class="grabber"></div>${html}</div>`;
+  s.hidden = false;
+  s.onclick = (e) => { if (e.target === s) closeSheet(); };
+  if (wire) wire(s);
+}
+function closeSheet() { const s = $('#sheet'); if (s) { s.hidden = true; s.innerHTML = ''; } }
+
+function openSizeSheet() {
+  openSheet(`
+    <h2>Text size</h2>
+    <div class="opts">${[15, 17, 19, 22, 26, 30].map((n) =>
+      `<button class="opt" data-size="${n}" aria-pressed="${prefs.size === n}" style="font-size:${Math.min(n, 22)}px">${n}</button>`).join('')}</div>
+    <h3>Columns on wide screens</h3>
+    <div class="opts">${[['auto', 'Automatic'], ['on', 'Always'], ['off', 'Never']].map(([v, l]) =>
+      `<button class="opt" data-cols="${v}" aria-pressed="${prefs.cols === v}">${l}</button>`).join('')}</div>
+    <h3>Auto-scroll speed</h3>
+    <div class="opts">${[['12', 'Slow'], ['22', 'Medium'], ['36', 'Fast']].map(([v, l]) =>
+      `<button class="opt" data-scroll="${v}" aria-pressed="${String(prefs.scroll || 22) === v}">${l}</button>`).join('')}</div>
+    <div class="actions"><button class="btn" data-act="close">Done</button></div>`,
+    (s) => {
+      s.onclick = async (e) => {
+        if (e.target === s) return closeSheet();
+        const b = e.target.closest('button');
+        if (!b) return;
+        if (b.dataset.act === 'close') return closeSheet();
+        if (b.dataset.size) prefs = await store.setPrefs({ size: Number(b.dataset.size) });
+        if (b.dataset.cols) prefs = await store.setPrefs({ cols: b.dataset.cols });
+        if (b.dataset.scroll) prefs = await store.setPrefs({ scroll: Number(b.dataset.scroll) });
+        openSizeSheet();
+        paintLyrics();
+      };
+    });
+}
+
+function openGrooveSheet() {
+  const g = G.normalize(current.local.groove);
+  openSheet(`
+    <h2>How it goes</h2>
+    <p style="font-size:13.5px;color:var(--ink-3);margin:-6px 0 16px">Saved on this device only. Nothing is sent anywhere.</p>
+
+    <h3>Time</h3>
+    <div class="opts">${G.METERS.map((m) =>
+      `<button class="opt" data-meter="${m}" aria-pressed="${g.meter === m}">${m}</button>`).join('')}</div>
+
+    <div class="field" style="margin-top:16px">
+      <label for="bpm">Tempo</label>
+      <div style="display:flex;gap:8px">
+        <input id="bpm" type="number" min="30" max="260" inputmode="numeric" value="${g.bpm || ''}" placeholder="e.g. 92" style="flex:1 1 auto">
+        <button class="btn" data-act="tap" style="flex:0 0 110px">Tap it</button>
+      </div>
+      <div class="hint" id="taphint">Tap the button in time with the song to set the tempo.</div>
+    </div>
+
+    <h3>Feel</h3>
+    <div class="opts">${Object.entries(G.FEELS).map(([v, l]) =>
+      `<button class="opt" data-feel="${v}" aria-pressed="${g.feel === v}">${l}</button>`).join('')}</div>
+
+    <div class="field" style="margin-top:16px">
+      <label for="strum">Strum pattern</label>
+      <input id="strum" type="text" value="${esc(g.strum || '')}" placeholder="D DU UDU" autocomplete="off" spellcheck="false">
+      <div class="hint"><b>D</b> down · <b>U</b> up · <b>x</b> muted · <b>-</b> rest · space separates beats</div>
+    </div>
+
+    <div class="field">
+      <label for="note">Note for whoever plays this</label>
+      <input id="note" type="text" value="${esc(g.note || '')}" placeholder="Starts quiet, builds on the last verse" maxlength="140">
+    </div>
+
+    <div class="actions">
+      <button class="btn quiet" data-act="clear">Clear</button>
+      <button class="btn primary" data-act="save">Save</button>
+    </div>`,
+    (s) => {
+      let draft = { ...g };
+      s.onclick = async (e) => {
+        if (e.target === s) return closeSheet();
+        const b = e.target.closest('button');
+        if (!b) return;
+
+        if (b.dataset.meter) { draft.meter = draft.meter === b.dataset.meter ? null : b.dataset.meter; refresh(); }
+        else if (b.dataset.feel) { draft.feel = draft.feel === b.dataset.feel ? null : b.dataset.feel; refresh(); }
+        else if (b.dataset.act === 'tap') {
+          const bpm = tapper.tap();
+          const hint = $('#taphint', s);
+          if (bpm) { $('#bpm', s).value = bpm; hint.textContent = `${bpm} bpm — keep tapping to refine.`; }
+          else hint.textContent = 'Keep tapping…';
+        } else if (b.dataset.act === 'clear') {
+          tapper.reset();
+          await store.setLocal(current.meta.id, { groove: null });
+          current.local = await store.getLocal(current.meta.id) || {};
+          closeSheet(); paintSong();
+        } else if (b.dataset.act === 'save') {
+          const next = G.normalize({
+            ...draft,
+            bpm: $('#bpm', s).value,
+            strum: $('#strum', s).value,
+            note: $('#note', s).value,
+          });
+          tapper.reset();
+          await store.setLocal(current.meta.id, { groove: G.isEmpty(next) ? null : next });
+          current.local = await store.getLocal(current.meta.id) || {};
+          closeSheet(); paintSong();
+        }
+      };
+      function refresh() {
+        s.querySelectorAll('[data-meter]').forEach((b) => b.setAttribute('aria-pressed', String(draft.meter === b.dataset.meter)));
+        s.querySelectorAll('[data-feel]').forEach((b) => b.setAttribute('aria-pressed', String(draft.feel === b.dataset.feel)));
+      }
+    });
+}
+
+function openEditSheet() {
+  openSheet(`
+    <h2>Adjust the chords</h2>
+    <p style="font-size:13.5px;color:var(--ink-3);margin:-6px 0 14px">
+      Move a chord by moving its <code>[G]</code> next to the syllable it lands on.
+      Your version stays on this device and replaces the original for you only.</p>
+    <div class="field">
+      <textarea id="src" spellcheck="false" autocomplete="off">${esc(current.lyrics)}</textarea>
+    </div>
+    <div class="actions">
+      ${current.edited ? '<button class="btn quiet" data-act="revert">Revert to original</button>' : ''}
+      <button class="btn primary" data-act="save">Save</button>
+    </div>`,
+    (s) => {
+      s.onclick = async (e) => {
+        if (e.target === s) return closeSheet();
+        const b = e.target.closest('button');
+        if (!b) return;
+        if (b.dataset.act === 'revert') {
+          await store.setLocal(current.meta.id, { lyrics: null });
+          closeSheet();
+          renderSongView(current.meta.id);
+        } else if (b.dataset.act === 'save') {
+          const text = $('#src', s).value;
+          await store.setLocal(current.meta.id, { lyrics: text });
+          closeSheet();
+          renderSongView(current.meta.id);
+        }
+      };
+    });
+}
+
+// --------------------------------------------------------------- settings
+
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-act="settings"]');
+  if (b) openSettings();
+});
+
+function openSettings() {
+  openSheetGlobal(`
+    <h2>Settings</h2>
+    <h3>Appearance</h3>
+    <div class="opts">${[['', 'Match device'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) =>
+      `<button class="opt" data-theme="${v}" aria-pressed="${(prefs.theme || '') === v}">${l}</button>`).join('')}</div>
+    <h3>Offline</h3>
+    <p style="font-size:13.5px;color:var(--ink-2);margin:0">
+      ${store.index.ids.length.toLocaleString()} songs in ${store.index.langCodes.length} languages are stored on this
+      device, so the app works with no connection and never waits on a server to open a song.</p>
+    <div class="actions"><button class="btn" data-act="close">Done</button></div>`,
+    (s) => {
+      s.onclick = async (e) => {
+        if (e.target === s) return closeSheetGlobal();
+        const b = e.target.closest('button');
+        if (!b) return;
+        if (b.dataset.act === 'close') return closeSheetGlobal();
+        if (b.dataset.theme !== undefined) {
+          prefs = await store.setPrefs({ theme: b.dataset.theme || null });
+          applyTheme();
+          openSettings();
+        }
+      };
+    });
+}
+
+// The list view has no #sheet element, so settings gets its own host.
+function openSheetGlobal(html, wire) {
+  let s = $('#gsheet');
+  if (!s) {
+    s = document.createElement('div');
+    s.id = 'gsheet';
+    s.className = 'sheet';
+    document.body.appendChild(s);
+  }
+  s.innerHTML = `<div class="sheetbody"><div class="grabber"></div>${html}</div>`;
+  s.hidden = false;
+  if (wire) wire(s);
+}
+function closeSheetGlobal() { const s = $('#gsheet'); if (s) { s.hidden = true; s.innerHTML = ''; } }
+
+let relayoutTimer = null, lastVW = 0, lastVH = 0;
+function scheduleRelayout() {
+  const w = viewportW(), h = viewportH();
+  // A URL bar sliding away is not a layout change worth re-fitting for.
+  if (w === lastVW && Math.abs(h - lastVH) < 120) return;
+  lastVW = w; lastVH = h;
+  clearTimeout(relayoutTimer);
+  relayoutTimer = setTimeout(() => { if (current && $('#lyrics')) paintLyrics(); }, 150);
+}
+window.addEventListener('resize', scheduleRelayout);
+window.addEventListener('orientationchange', scheduleRelayout);
+window.visualViewport?.addEventListener('resize', scheduleRelayout);
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeSheet(); closeSheetGlobal(); }
+});
