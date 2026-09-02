@@ -13,6 +13,20 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<script>
+  // Runs before the first paint. The theme preference also lives in
+  // IndexedDB, but that is asynchronous — reading it there means the page
+  // paints in the device's theme first and flips once the read returns,
+  // which is the black flash on every refresh for anyone whose choice
+  // differs from their system setting. localStorage is synchronous, so the
+  // choice can be applied while the document is still parsing.
+  try {
+    var t = localStorage.getItem('sb-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) { /* private mode: fall back to the media query */ }
+</script>
 <link rel="stylesheet" href="app.css">
 <link rel="preload" href="data/index.json" as="fetch" crossorigin>
 <script type="module" src="app.js"></script>

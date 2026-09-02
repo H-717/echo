@@ -65,8 +65,23 @@ let autoscroll = null;
 })();
 
 function applyTheme() {
-  if (prefs.theme) document.documentElement.setAttribute('data-theme', prefs.theme);
+  const t = prefs.theme;
+  if (t) document.documentElement.setAttribute('data-theme', t);
   else document.documentElement.removeAttribute('data-theme');
+
+  // Mirror it where the inline script in the document head can read it
+  // synchronously on the next load, so the page never paints the wrong theme.
+  try {
+    if (t) localStorage.setItem('sb-theme', t);
+    else localStorage.removeItem('sb-theme');
+  } catch (e) { /* private mode: the flash comes back, nothing else breaks */ }
+
+  // Keep the browser's own chrome in step with the choice.
+  const dark = t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches);
+  for (const m of document.querySelectorAll('meta[name="theme-color"]')) {
+    m.setAttribute('content', dark ? '#0d0f13' : '#fcfcfd');
+    m.removeAttribute('media');
+  }
 }
 
 // ---------------------------------------------------------------- router
