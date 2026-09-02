@@ -60,6 +60,16 @@ let autoscroll = null;
   // would keep serving the last build.
   const isDev = ['localhost', '127.0.0.1'].includes(location.hostname);
   if ('serviceWorker' in navigator && !isDev) {
+    // A new worker installs in the background, so the refresh that fetches it
+    // is still served the old build and only the one after that shows the new
+    // one. That makes every update look like it did not take. Reload once, as
+    // soon as the new worker actually takes control.
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading) return;
+      reloading = true;
+      location.reload();
+    });
     navigator.serviceWorker.register(path('sw.js'), { scope: BASE }).catch(() => {});
   }
 })();
@@ -748,7 +758,9 @@ async function handleDockAction(act) {
       openGrooveSheet();
     } else if (act === 'fit') {
       prefs = await store.setPrefs({ fit: !prefs.fit });
-      paintDock(); paintLyrics();
+      // Repaint the whole view: whether the heading and an empty rhythm bar
+      // are shown depends on the mode, and only paintSong rebuilds those.
+      paintSong();
     } else if (act === 'size') {
       openSizeSheet();
     } else if (act === 'autoscroll') {
