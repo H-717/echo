@@ -73,11 +73,16 @@ export function parseStrum(str) {
 export class Metronome {
   constructor() {
     this.ctx = null;
-    this.timer = null;
+    this.scheduler = null;   // audio look-ahead timer
+    this.raf = null;         // visual loop
     this.running = false;
-    this.onBeat = null;
+    this.onBeat = null;      // rebindable: the UI is rebuilt under us
+    this.queue = [];         // beats scheduled but not yet shown
+    this.voices = [];        // scheduled oscillators, so stop is immediate
     this.beat = 0;
     this.countInBars = 1;
+    this.bpm = 90;
+    this.perBar = 4;
   }
 
   start(bpm, meter = '4/4') {
@@ -88,39 +93,66 @@ export class Metronome {
     if (this.ctx.state === 'suspended') this.ctx.resume();
 
     this.bpm = bpm;
+    this.meter = meter;
     this.perBar = beatsPerBar(meter);
-    this.spb = 60 / bpm;
     this.beat = 0;
+    this.queue = [];
+    this.voices = [];
     this.nextTime = this.ctx.currentTime + 0.12;
     this.running = true;
 
-    // Schedule 150ms ahead, checked every 25ms.
-    this.timer = setInterval(() => this.schedule(), 25);
+    this.scheduler = setInterval(() => this.schedule(), 25);
     this.schedule();
+    this.tick();
     return true;
   }
+
+  /**
+   * Change tempo or meter without stopping. Editing the rhythm of a song you
+   * are currently playing along to should adjust the click, not silence it.
+   */
+  setTempo(bpm, meter = this.meter) {
+    if (!this.running) return;
+    this.bpm = bpm;
+    this.meter = meter;
+    const perBar = beatsPerBar(meter);
+    if (perBar !== this.perBar) { this.perBar = perBar; this.beat = 0; }
+  }
+
+  get spb() { return 60 / this.bpm; }
 
   schedule() {
     if (!this.running) return;
     while (this.nextTime < this.ctx.currentTime + 0.15) {
       const inBar = this.beat % this.perBar;
-      const bar = Math.floor(this.beat / this.perBar);
-      this.click(this.nextTime, inBar === 0, bar < this.countInBars);
-      if (this.onBeat) {
-        const t = this.nextTime, b = this.beat, ib = inBar, counting = bar < this.countInBars;
-        const delay = Math.max(0, (t - this.ctx.currentTime) * 1000);
-        setTimeout(() => this.onBeat({ beat: b, inBar: ib, counting }), delay);
-      }
+      const counting = Math.floor(this.beat / this.perBar) < this.countInBars;
+      this.click(this.nextTime, inBar === 0, counting);
+      this.queue.push({ time: this.nextTime, beat: this.beat, inBar, counting });
       this.nextTime += this.spb;
       this.beat++;
     }
+  }
+
+  /**
+   * Visuals are driven off the audio clock rather than a timer per beat.
+   * Timers fired late, could not be cancelled, and kept flashing the dots
+   * after the metronome had been stopped.
+   */
+  tick() {
+    if (!this.running) return;
+    const now = this.ctx.currentTime;
+    while (this.queue.length && this.queue[0].time <= now + 0.02) {
+      const b = this.queue.shift();
+      if (this.onBeat) this.onBeat(b);
+    }
+    this.raf = requestAnimationFrame(() => this.tick());
   }
 
   click(at, accent, countIn) {
     const o = this.ctx.createOscillator();
     const g = this.ctx.createGain();
     o.frequency.value = accent ? 1500 : 900;
-    // The count-in is deliberately louder so a group hears where bar one is.
+    // The count-in is louder so a group hears where bar one is.
     const peak = countIn ? 0.5 : accent ? 0.34 : 0.2;
     g.gain.setValueAtTime(0.0001, at);
     g.gain.exponentialRampToValueAtTime(peak, at + 0.002);
@@ -128,12 +160,20 @@ export class Metronome {
     o.connect(g).connect(this.ctx.destination);
     o.start(at);
     o.stop(at + 0.08);
+    this.voices.push(o);
+    o.onended = () => { this.voices = this.voices.filter((v) => v !== o); };
   }
 
   stop() {
     this.running = false;
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    if (this.scheduler) clearInterval(this.scheduler);
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.scheduler = this.raf = null;
+    this.queue = [];
+    // Clicks are scheduled ahead of time, so silence the ones already queued
+    // instead of letting them play on after the button says stopped.
+    for (const v of this.voices) { try { v.stop(); } catch { /* already done */ } }
+    this.voices = [];
   }
 }
 

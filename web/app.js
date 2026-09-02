@@ -204,7 +204,7 @@ async function runLyricSearch() {
 
 function rowHtml(s, extra = '') {
   const ref = s.refs.length ? `<span class="n">${esc(store.bookName(s.refs[0][0]))} ${esc(s.refs[0][1])}</span>` : '';
-  return `<a class="row" data-nav href="${path(`${s.id}/${s.slug}`)}">
+  return `<a class="row" data-nav href="${path(String(s.id))}">
     <span class="t">${esc(s.title)}${extra}</span>
     ${s.key ? `<span class="n">${esc(s.key)}</span>` : ''}
     ${ref}
@@ -310,8 +310,11 @@ async function renderSongView(id) {
   if (!meta) { go(BASE, true); return; }
 
   document.title = meta.title;
-  if (location.pathname !== path(`${id}/${meta.slug}`)) {
-    history.replaceState({}, '', path(`${id}/${meta.slug}`));
+  // Keep the address bar at just the number. Someone reading from a laptop
+  // changes song by editing "1482" to "1483"; a long slug makes that fiddly.
+  // Older /<id>/<slug> links still resolve — the router reads the digits.
+  if (location.pathname !== path(String(id))) {
+    history.replaceState({}, '', path(String(id)));
   }
 
   // Paint the frame immediately from the in-memory index, then fill the body.
@@ -367,6 +370,7 @@ function paintSong() {
   paintDock();
   paintLyrics();
   wireGrooveBar();
+  syncMetronome();
 }
 
 function paintLyrics() {
@@ -611,29 +615,52 @@ function wireGrooveBar() {
     const btn = e.target.closest('[data-act]');
     if (!btn) return;
     if (btn.dataset.act === 'groove') openGrooveSheet();
-    if (btn.dataset.act === 'metro') toggleMetronome(btn);
+    if (btn.dataset.act === 'metro') toggleMetronome();
   };
 }
 
-function toggleMetronome(btn) {
-  const g = G.normalize(current.local.groove);
-  if (metro.running) {
-    metro.stop();
-    btn.setAttribute('aria-pressed', 'false');
-    btn.innerHTML = `<svg viewBox="0 0 24 24">${ICONS.play}</svg> Count in`;
-    document.querySelectorAll('#beats span').forEach((s) => s.classList.remove('on', 'counting'));
+/**
+ * Point the running metronome at the elements currently on screen.
+ *
+ * Saving the rhythm repaints the whole song view, which replaced the beat dots
+ * and the button while the click carried on playing — the control vanished
+ * mid-count. The metronome now outlives the markup and is simply re-attached.
+ */
+function syncMetronome() {
+  const btn = document.querySelector('[data-act="metro"]');
+  const dots = [...document.querySelectorAll('#beats span')];
+
+  if (!metro.running) {
+    metro.onBeat = null;
+    if (btn) {
+      btn.setAttribute('aria-pressed', 'false');
+      btn.innerHTML = `<svg viewBox="0 0 24 24">${ICONS.play}</svg> Count in`;
+    }
     return;
   }
-  const dots = [...document.querySelectorAll('#beats span')];
+
+  // The rhythm may have been edited down to nothing while it was playing.
+  if (!btn) { metro.stop(); metro.onBeat = null; return; }
+
   metro.onBeat = ({ inBar, counting }) => {
-    dots.forEach((d, i) => {
-      d.classList.toggle('on', i === inBar);
-      d.classList.toggle('counting', counting);
-    });
+    for (let i = 0; i < dots.length; i++) {
+      dots[i].classList.toggle('on', i === inBar);
+      dots[i].classList.toggle('counting', counting);
+    }
   };
-  if (!metro.start(g.bpm, g.meter)) return;
   btn.setAttribute('aria-pressed', 'true');
   btn.innerHTML = `<svg viewBox="0 0 24 24">${ICONS.stop}</svg> Stop`;
+}
+
+function toggleMetronome() {
+  if (metro.running) {
+    metro.stop();
+    document.querySelectorAll('#beats span').forEach((d) => d.classList.remove('on', 'counting'));
+  } else {
+    const g = G.normalize(current.local.groove);
+    if (!g.bpm || !metro.start(g.bpm, g.meter)) return;
+  }
+  syncMetronome();
 }
 
 // ----------------------------------------------------------------- dock
@@ -878,6 +905,7 @@ function openGrooveSheet() {
           tapper.reset();
           await store.setLocal(current.meta.id, { groove: null });
           current.local = await store.getLocal(current.meta.id) || {};
+          metro.stop();
           closeSheet(); paintSong();
         } else if (b.dataset.act === 'save') {
           const next = G.normalize({
@@ -889,6 +917,10 @@ function openGrooveSheet() {
           tapper.reset();
           await store.setLocal(current.meta.id, { groove: G.isEmpty(next) ? null : next });
           current.local = await store.getLocal(current.meta.id) || {};
+          if (metro.running) {
+            if (next.bpm) metro.setTempo(next.bpm, next.meter || '4/4');
+            else metro.stop();
+          }
           closeSheet(); paintSong();
         }
       };
