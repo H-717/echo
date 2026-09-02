@@ -27,14 +27,20 @@ export function parseChord(text) {
   if (!t) return null;
   // A few hundred brackets in the corpus are written lowercase ("g", "am").
   // Only retry short tokens, so words are still rejected below.
-  if (t.length <= 3 && /^[a-g]/.test(t)) t = t[0].toUpperCase() + t.slice(1);
+  if (t.length <= 3 && /^[a-gh]/i.test(t)) t = t[0].toUpperCase() + t.slice(1);
+  // German notation writes B natural as H. Without this the chord is not
+  // recognised at all and shows up as literal "[H]" inside the lyric. Bounded
+  // by length so words like "Hosanna" are never mistaken for a chord.
+  if (t.length <= 5 && /^[Hh]/.test(t)) t = 'B' + t.slice(1);
   const m = CHORD_RE.exec(t);
   if (!m) return null;
   const [, root, suffix, bass] = m;
   if (PITCH[root] === undefined) return null;
   if (bass && PITCH[bass] === undefined) return null;
-  // Reject things like "Ebenezer" that start like a chord but are words.
-  if (suffix && /^[a-z]{3,}$/.test(suffix) && !KNOWN_SUFFIX.has(suffix)) return null;
+  // Reject things that start like a chord but are words ("Ebenezer", "He").
+  // A real quality is either a known word (m, sus4, dim) or contains a digit.
+  if (suffix && /^[A-Za-z]+$/.test(suffix)
+      && !KNOWN_SUFFIX.has(suffix.toLowerCase()) && suffix !== 'M') return null;
   return { root, suffix: suffix || '', bass: bass || null };
 }
 
@@ -59,14 +65,25 @@ export function parseBracket(body) {
   const raw = (body || '').trim();
   if (!raw) return null;
 
+  // Parentheses are often part of the quality rather than a grouping:
+  // "G(add11)", "Bb(7)", "A(5th)". Try the whole token before splitting it up,
+  // or those get torn into pieces that parse as nothing.
+  // Only for brackets that actually contain parentheses. Applying it to every
+  // token would swallow "G-D-Em-C" as one bogus chord whose root alone
+  // transposes, instead of the four chords it really is.
+  if (/[()]/.test(raw)) {
+    const whole = parseChord(raw) || parseChord(raw.replace(/[()]/g, ''));
+    if (whole) return { tokens: [{ chord: whole }] };
+  }
+
   const tokens = [];
   let found = 0;
   // Split on runs of separators, keeping them so the label reads as written.
-  for (const part of raw.split(/(\s*[-–—]\s*|\s+|[()])/)) {
+  for (const part of raw.split(/(\s*[-–—.…]+\s*|\s+|[()])/)) {
     if (part === '' || part === undefined) continue;
     const c = parseChord(part);
     if (c) { tokens.push({ chord: c }); found++; }
-    else if (/^(\s*[-–—]\s*|\s+|[()])$/.test(part)) tokens.push({ lit: part });
+    else if (/^(\s*[-–—.…]+\s*|\s+|[()])$/.test(part)) tokens.push({ lit: part });
     else return null;   // real words in the bracket: not a chord group
   }
   return found ? { tokens } : null;
