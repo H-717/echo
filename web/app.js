@@ -77,6 +77,8 @@ function go(path, replace = false) {
 function route() {
   stopAutoscroll();
   metro.stop();
+  window.removeEventListener('scroll', onListScroll);
+  if (moreObserver) { moreObserver.disconnect(); moreObserver = null; }
   document.documentElement.classList.remove('locked');
   const rest = location.pathname.startsWith(BASE)
     ? location.pathname.slice(BASE.length)
@@ -96,7 +98,11 @@ function onGlobalClick(e) {
 
 // ------------------------------------------------------------ list view
 
-let listState = { q: '', lyricHits: [], lyricPending: false };
+// Rows are appended a page at a time as you reach the bottom, so all 9,216
+// songs are reachable without building 9,216 DOM nodes up front.
+const PAGE = 120;
+let listState = { q: '', lyricHits: [], lyricPending: false, hits: [], total: 0, shown: 0 };
+let moreObserver = null;
 
 function renderList() {
   const params = new URLSearchParams(location.search);
@@ -124,6 +130,11 @@ function renderList() {
   renderLangFilters();
   const input = $('#q');
   input.addEventListener('input', onSearchInput);
+  $('.clr').addEventListener('click', () => {
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus();
+  });
   renderResults();
   renderSyncStatus(store.syncState);
 }
@@ -180,8 +191,8 @@ function onSearchInput(e) {
 
 async function runLyricSearch() {
   const q = listState.q;
-  const titleHits = store.searchTitles(q, { langs: activeLangs(), limit: 200 });
-  const exclude = new Set(titleHits.rows.map((r) => r.id));
+  const titleHits = store.searchTitles(q, { langs: activeLangs() });
+  const exclude = new Set(titleHits.hits.map((i) => store.index.ids[i]));
   const hits = await store.searchLyrics(q, { exclude });
   if (q !== listState.q) return;    // a newer keystroke won
   listState.lyricHits = store.resolveHits(hits, activeLangs());
@@ -201,23 +212,84 @@ function rowHtml(s, extra = '') {
 function renderResults() {
   const el = $('#results');
   if (!el) return;
-  const { rows, total } = store.searchTitles(listState.q, { langs: activeLangs(), limit: 200 });
 
-  if (!rows.length && !listState.lyricHits.length) {
+  const { hits, total } = store.searchTitles(listState.q, { langs: activeLangs() });
+  listState.hits = hits;
+  listState.total = total;
+  listState.shown = 0;
+
+  if (moreObserver) { moreObserver.disconnect(); moreObserver = null; }
+  window.removeEventListener('scroll', onListScroll);
+
+  if (!total && !listState.lyricHits.length) {
     el.innerHTML = `<div class="empty">${listState.q ? `Nothing matches “${esc(listState.q)}”.` : 'No songs in the selected languages.'}</div>`;
     return;
   }
 
-  let html = `<div class="count">${total.toLocaleString()} ${total === 1 ? 'title' : 'titles'}${total > rows.length ? ` · showing ${rows.length}` : ''}</div>`;
-  html += `<div class="rows">${rows.map((s) => rowHtml(s)).join('')}</div>`;
+  el.innerHTML =
+    `<div class="count" id="count"></div>` +
+    `<div class="rows" id="rows"></div>` +
+    `<div id="more" style="height:1px"></div>` +
+    lyricSectionHtml();
 
-  if (listState.lyricHits.length) {
-    html += `<div class="groupname">Found in the words</div><div class="rows">` +
-      listState.lyricHits.map((s) => rowHtml(s, `<span class="snip">${esc(s.snippet)}</span>`)).join('') + '</div>';
-  } else if (listState.lyricPending) {
-    html += `<div class="groupname">Searching the words…</div>`;
+  appendRows();
+
+  // Load the next page slightly before the sentinel is actually on screen.
+  const sentinel = $('#more');
+  if (sentinel) {
+    moreObserver = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) appendRows();
+    }, { rootMargin: '600px 0px' });
+    moreObserver.observe(sentinel);
   }
-  el.innerHTML = html;
+  // IntersectionObserver doesn't run in a hidden tab and can be missed during a
+  // fast fling, so scrolling is also checked directly. Whichever fires first
+  // wins; appendRows is idempotent once the list is exhausted.
+  window.addEventListener('scroll', onListScroll, { passive: true });
+}
+
+let lastScrollCheck = 0;
+function onListScroll() {
+  // A timestamp throttle rather than requestAnimationFrame: rAF is throttled to
+  // roughly once a second in a background tab, which would stall loading.
+  const now = performance.now();
+  if (now - lastScrollCheck < 60) return;
+  lastScrollCheck = now;
+
+  const sentinel = $('#more');
+  if (!sentinel) { window.removeEventListener('scroll', onListScroll); return; }
+  if (sentinel.getBoundingClientRect().top - window.innerHeight < 600) appendRows();
+}
+
+function appendRows() {
+  const rowsEl = $('#rows');
+  if (!rowsEl || listState.shown >= listState.hits.length) return;
+
+  const next = listState.hits.slice(listState.shown, listState.shown + PAGE);
+  rowsEl.insertAdjacentHTML('beforeend', next.map((i) => rowHtml(store.metaAt(i))).join(''));
+  listState.shown += next.length;
+
+  const c = $('#count');
+  if (c) {
+    const t = listState.total.toLocaleString();
+    c.textContent = listState.shown < listState.total
+      ? `${listState.shown.toLocaleString()} of ${t} ${listState.total === 1 ? 'title' : 'titles'}`
+      : `${t} ${listState.total === 1 ? 'title' : 'titles'}`;
+  }
+  if (listState.shown >= listState.hits.length && moreObserver) {
+    moreObserver.disconnect();
+    moreObserver = null;
+  }
+}
+
+function lyricSectionHtml() {
+  if (listState.lyricHits.length) {
+    return `<div class="groupname">Found in the words</div><div class="rows">` +
+      listState.lyricHits.map((s) => rowHtml(s, `<span class="snip">${esc(s.snippet)}</span>`)).join('') +
+      '</div>';
+  }
+  if (listState.lyricPending) return `<div class="groupname">Searching the words…</div>`;
+  return '';
 }
 
 function renderSyncStatus(state) {

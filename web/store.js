@@ -62,6 +62,15 @@ export class Store {
     this.folded = index.titles.map(fold);
     for (let i = 0; i < index.ids.length; i++) this.byId.set(index.ids[i], i);
 
+    // Sorting 9k titles with localeCompare on every keystroke is far too slow,
+    // so the alphabetical order is computed once here and then just filtered.
+    // Sort on the folded title, not the raw one: otherwise leading punctuation
+    // (the Spanish "¡" and "¿") sorts ahead of every letter and those
+    // titles all pile up at the top of the list instead of under their letter.
+    const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+    this.alpha = index.titles.map((_, i) => i)
+      .sort((a, b) => collator.compare(this.folded[a], this.folded[b]));
+
     for (const b of this.books) {
       for (const [songId, number] of Object.entries(b.songs)) {
         const id = Number(songId);
@@ -129,6 +138,9 @@ export class Store {
     };
   }
 
+  /** Meta for a position in the index arrays (not a song id). */
+  metaAt(i) { return this.meta(this.index.ids[i]); }
+
   bookName(slugName) {
     const b = this.books.find((x) => x.slug === slugName);
     return b ? b.name : slugName;
@@ -169,33 +181,30 @@ export class Store {
    * no regex is ever built from user input, so no query can throw or explode.
    * Ranked: whole-title match, then prefix, then word-start, then anywhere.
    */
-  searchTitles(query, { langs = null, limit = 200 } = {}) {
+  searchTitles(query, { langs = null } = {}) {
     const q = fold(query);
-    if (!q) return this.browse({ langs, limit });
+    if (!q) return this.browse({ langs });
 
     const x = this.index;
-    const hits = [];
+    const scored = [];
     for (let i = 0; i < this.folded.length; i++) {
       if (langs && !langs.has(x.langCodes[x.langs[i]])) continue;
       const t = this.folded[i];
       const at = t.indexOf(q);
       if (at === -1) continue;
       const rank = t === q ? 0 : at === 0 ? 1 : t[at - 1] === ' ' ? 2 : 3;
-      hits.push([rank, at, i]);
+      scored.push([rank, at, t.length, i]);
     }
-    hits.sort((a, b) => a[0] - b[0] || a[1] - b[1] || this.folded[a[2]].length - this.folded[b[2]].length);
-    return { rows: hits.slice(0, limit).map(([, , i]) => this.meta(x.ids[i])), total: hits.length };
+    scored.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+    return { hits: scored.map((r) => r[3]), total: scored.length };
   }
 
-  browse({ langs = null, limit = 200 } = {}) {
+  browse({ langs = null } = {}) {
     const x = this.index;
-    const rows = [];
-    for (let i = 0; i < x.ids.length && rows.length < limit; i++) {
-      if (langs && !langs.has(x.langCodes[x.langs[i]])) continue;
-      rows.push(i);
-    }
-    const order = [...rows].sort((a, b) => this.folded[a].localeCompare(this.folded[b]));
-    return { rows: order.map((i) => this.meta(x.ids[i])), total: rows.length };
+    const hits = langs
+      ? this.alpha.filter((i) => langs.has(x.langCodes[x.langs[i]]))
+      : this.alpha;
+    return { hits, total: hits.length };
   }
 
   /**
