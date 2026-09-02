@@ -283,6 +283,29 @@ a { color: inherit; text-decoration: none; }
 .dockrow { max-width: 780px; margin: 0 auto; display: flex; align-items: center; gap: 4px; }
 .dockrow .spacer { flex: 1 1 auto; }
 
+/* Wide enough: every control sits in the dock and "more" is unnecessary. */
+.secondary { display: contents; }
+.dockrow .more { display: none; }
+
+/* A phone cannot hold two steppers and five icons. Keep what you touch while
+   actually playing — key, capo, chords, scroll — and fold the setup controls
+   into a menu rather than letting them run off the edge. */
+@media (max-width: 560px) {
+  .secondary { display: none; }
+  .dockrow .more { display: grid; }
+}
+
+/* Menu rows for the folded controls */
+.menu { display: flex; flex-direction: column; gap: 2px; }
+.menuitem {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 8px; border-radius: 9px; min-height: var(--tap);
+  font-size: 15px; text-align: left; width: 100%;
+}
+.menuitem:hover { background: var(--sunk); }
+.menuitem .ico { width: 32px; height: 32px; flex: none; }
+.menuitem .ico svg { width: 19px; height: 19px; }
+
 .stepper { display: flex; align-items: center; gap: 2px; background: var(--sunk); border-radius: 9px; padding: 2px; }
 .stepper button { width: 38px; height: 38px; border-radius: 7px; display: grid; place-items: center; font-size: 19px; color: var(--ink-2); }
 .stepper button:hover { background: var(--surface); color: var(--ink); }
@@ -305,10 +328,33 @@ a { color: inherit; text-decoration: none; }
   background: var(--surface); color: var(--ink);
   border-radius: 16px 16px 0 0;
   padding: 8px 18px max(22px, env(safe-area-inset-bottom));
-  max-height: 86vh; overflow-y: auto;
+  max-height: 86dvh; overflow-y: auto;
   box-shadow: 0 -8px 40px rgba(0, 0, 0, .2);
 }
 .grabber { width: 38px; height: 4px; border-radius: 99px; background: var(--rule); margin: 8px auto 14px; }
+
+/* A sheet rising from the bottom edge is a thumb-reach idiom. With a mouse and
+   a wide screen it just looks stranded, so on a desktop it becomes a centred
+   dialog instead. */
+@media (min-width: 620px) and (pointer: fine) {
+  .sheet { align-items: center; padding: 24px; }
+  .sheetbody {
+    border-radius: 14px;
+    padding-bottom: 18px;
+    max-height: min(660px, 88dvh);
+    box-shadow: 0 18px 60px rgba(0, 0, 0, .28);
+  }
+  .grabber { display: none; }
+  .sheetbody h2 { margin-top: 8px; }
+}
+
+/* The primary action must never be the thing hidden below an inner scroll. */
+.sheetbody .actions {
+  position: sticky; bottom: 0;
+  margin-top: 22px; padding: 12px 0 2px;
+  background: var(--surface);
+  border-top: 1px solid var(--rule);
+}
 .sheetbody h2 { font-size: 17px; margin: 0 0 14px; letter-spacing: -.01em; }
 .sheetbody h3 {
   font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3);
@@ -316,6 +362,8 @@ a { color: inherit; text-decoration: none; }
 }
 
 .field { margin-bottom: 14px; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; align-items: start; }
+@media (max-width: 560px) { .pair { grid-template-columns: 1fr; } }
 .field label { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 5px; }
 .field input[type="text"], .field input[type="number"], .field select, .field textarea {
   width: 100%; min-height: var(--tap); padding: 9px 11px;
@@ -383,8 +431,10 @@ html.locked, html.locked body { overflow: hidden; height: 100dvh; }
   .songhead h1 { font-size: clamp(20px, 5.4vw, 26px); }
   .top .name { font-size: 14px; }
   .dockrow { gap: 2px; }
-  .stepper .val { min-width: 50px; font-size: 13px; }
-  .stepper button { width: 34px; height: 38px; }
+  .stepper { padding: 1px; }
+  .stepper .val { min-width: 42px; font-size: 13px; }
+  .stepper button { width: 32px; height: 38px; font-size: 17px; }
+  .ico { width: 40px; height: 40px; }
   .groove { font-size: 13px; gap: 6px; }
   .lyrics.cols { column-count: 1; }
   .sheetbody { max-height: 80dvh; }

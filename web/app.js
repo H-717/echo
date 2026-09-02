@@ -24,6 +24,7 @@ const ICONS = {
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-2.7 1.1V21a2 2 0 11-4 0v-.1A1.6 1.6 0 007.5 19a1.6 1.6 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.6 1.6 0 00-1.1-2.7H1a2 2 0 110-4h.1A1.6 1.6 0 002.6 7.5a1.6 1.6 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.6 1.6 0 001.8.3H7a1.6 1.6 0 001-1.5V1a2 2 0 114 0v.1a1.6 1.6 0 001 1.5 1.6 1.6 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.6 1.6 0 00-.3 1.8V7a1.6 1.6 0 001.5 1H21a2 2 0 110 4h-.1a1.6 1.6 0 00-1.5 1z"/>',
   play: '<path d="M6 4l14 8-14 8z"/>',
   tempo: '<path d="M9.5 3h5l3.5 18h-12z"/><path d="M12 21V9l4.5-3.5"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
 };
 const icon = (n, cls = 'ico') => `<span class="${cls}"><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg></span>`;
@@ -629,18 +630,24 @@ function paintDock() {
     ${tuning}
     <span class="spacer"></span>
     ${meta.key ? `<button class="ico" data-act="chords" aria-pressed="${prefs.chords}" aria-label="Show chords"><svg viewBox="0 0 24 24">${ICONS.music}</svg></button>` : ''}
-    <button class="ico" data-act="tempo" aria-label="Rhythm"><svg viewBox="0 0 24 24">${ICONS.tempo}</svg></button>
-    <button class="ico" data-act="fit" aria-pressed="${prefs.fit}" aria-label="Fit song to screen"><svg viewBox="0 0 24 24">${ICONS.fit}</svg></button>
-    <button class="ico" data-act="size" aria-label="Text size"><svg viewBox="0 0 24 24">${ICONS.type}</svg></button>
     <button class="ico" data-act="autoscroll" aria-pressed="${!!autoscroll}" aria-label="Auto-scroll"><svg viewBox="0 0 24 24">${ICONS.scroll}</svg></button>
-    <button class="ico" data-act="editchords" aria-label="Adjust chords"><svg viewBox="0 0 24 24">${ICONS.edit}</svg></button>
+    <span class="secondary">
+      <button class="ico" data-act="tempo" aria-label="Rhythm"><svg viewBox="0 0 24 24">${ICONS.tempo}</svg></button>
+      <button class="ico" data-act="fit" aria-pressed="${prefs.fit}" aria-label="Fit song to screen"><svg viewBox="0 0 24 24">${ICONS.fit}</svg></button>
+      <button class="ico" data-act="size" aria-label="Text size"><svg viewBox="0 0 24 24">${ICONS.type}</svg></button>
+      <button class="ico" data-act="editchords" aria-label="Adjust chords"><svg viewBox="0 0 24 24">${ICONS.edit}</svg></button>
+    </span>
+    <button class="ico more" data-act="more" aria-label="More"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none">${ICONS.more}</svg></button>
   </div>`;
 
-  d.onclick = async (e) => {
+  d.onclick = (e) => {
     const b = e.target.closest('[data-act]');
-    if (!b) return;
-    const act = b.dataset.act;
+    if (b) handleDockAction(b.dataset.act);
+  };
+}
 
+async function handleDockAction(act) {
+  {
     if (act === 'tr+' || act === 'tr-') {
       current.steps = Math.max(-11, Math.min(11, current.steps + (act === 'tr+' ? 1 : -1)));
       await store.setLocal(current.meta.id, { steps: current.steps || null });
@@ -664,8 +671,39 @@ function paintDock() {
       paintDock();
     } else if (act === 'editchords') {
       openEditSheet();
+    } else if (act === 'more') {
+      openMoreSheet();
     }
-  };
+  }
+}
+
+/** The controls folded away on a narrow screen, where the dock has no room. */
+function openMoreSheet() {
+  const items = [
+    ['tempo', 'Rhythm', 'tempo'],
+    ['fit', prefs.fit ? 'Fit to screen: on' : 'Fit to screen: off', 'fit'],
+    ['size', 'Text size and scrolling', 'type'],
+    ['editchords', 'Adjust the chords', 'edit'],
+  ];
+  openSheet(`
+    <h2>Song options</h2>
+    <div class="menu">
+      ${items.map(([act, label, ic]) => `
+        <button class="menuitem" data-act="${act}">
+          <span class="ico"><svg viewBox="0 0 24 24">${ICONS[ic]}</svg></span>
+          <span>${label}</span>
+        </button>`).join('')}
+    </div>
+    <div class="actions"><button class="btn" data-act="close">Close</button></div>`,
+    (s) => {
+      s.onclick = (e) => {
+        if (e.target === s) return closeSheet();
+        const b = e.target.closest('[data-act]');
+        if (!b) return;
+        closeSheet();
+        if (b.dataset.act !== 'close') handleDockAction(b.dataset.act);
+      };
+    });
 }
 
 // ----------------------------------------------------------- autoscroll
