@@ -54,7 +54,14 @@
 
 * { box-sizing: border-box; }
 
-html { -webkit-text-size-adjust: 100%; }
+html {
+  -webkit-text-size-adjust: 100%;
+  /* Reserve the scrollbar's width always. Without this, a layout that just
+     overflows gains a scrollbar, which narrows the page, which reflows the
+     text taller, which keeps the scrollbar — a loop that lands on a few
+     stray pixels of scroll. */
+  scrollbar-gutter: stable;
+}
 
 body {
   margin: 0;
@@ -166,8 +173,11 @@ a { color: inherit; text-decoration: none; }
    middle of a wide display, and sizes the song so nobody has to scroll while
    the room is singing. */
 .song.fit { max-width: none; padding-bottom: 0; }
-.song.fit .songhead { padding: 10px 0 6px; }
-.song.fit .songhead h1 { font-size: clamp(19px, 2.2vw, 26px); }
+/* The sticky bar already carries the title, language and hymnal number, so in
+   fit mode the heading is 70-odd pixels of duplication. Playing a song needs
+   the chords and the words; everything else can wait until you stop. */
+.song.fit .songhead { display: none; }
+.song.fit .groove { margin-top: 8px; }
 
 .songhead { padding: 18px 0 10px; }
 .songhead h1 { font-size: clamp(22px, 4.4vw, 30px); line-height: 1.15; letter-spacing: -.02em; margin: 0 0 6px; text-wrap: balance; }
@@ -351,6 +361,16 @@ a { color: inherit; text-decoration: none; }
   .lyrics { columns: 2; column-gap: 34px; font-size: 12pt; }
   .st { break-inside: avoid; }
   .cd { color: #000; }
+}
+
+/* Auto-scroll speed */
+.speed { display: flex; align-items: center; gap: 12px; }
+.speed input[type="range"] {
+  flex: 1 1 auto; min-height: 34px; accent-color: var(--accent); background: none;
+}
+.speed .val {
+  flex: none; min-width: 82px; text-align: right;
+  font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums;
 }
 
 /* Fit mode that genuinely fits shows no scrollbar. */

@@ -23,6 +23,7 @@ const ICONS = {
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-2.7 1.1V21a2 2 0 11-4 0v-.1A1.6 1.6 0 007.5 19a1.6 1.6 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.6 1.6 0 00-1.1-2.7H1a2 2 0 110-4h.1A1.6 1.6 0 002.6 7.5a1.6 1.6 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.6 1.6 0 001.8.3H7a1.6 1.6 0 001-1.5V1a2 2 0 114 0v.1a1.6 1.6 0 001 1.5 1.6 1.6 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.6 1.6 0 00-.3 1.8V7a1.6 1.6 0 001.5 1H21a2 2 0 110 4h-.1a1.6 1.6 0 00-1.5 1z"/>',
   play: '<path d="M6 4l14 8-14 8z"/>',
+  tempo: '<path d="M9.5 3h5l3.5 18h-12z"/><path d="M12 21V9l4.5-3.5"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
 };
 const icon = (n, cls = 'ico') => `<span class="${cls}"><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg></span>`;
@@ -454,10 +455,21 @@ function layoutFit(el, song) {
     el.style.setProperty('--cols', String(cols));
     el.style.setProperty('--lyric-size', size + 'px');
   };
-  // A multi-column box that can't hold its content spills into extra columns
-  // sideways rather than growing taller, so height alone never reports the
-  // overflow. Width is the signal that actually catches it.
-  const overflows = (room) => el.scrollHeight > room + 1 || el.scrollWidth > el.clientWidth + 1;
+  // Measuring a multi-column box is not as simple as reading its height.
+  // Content that will not fit spills sideways into extra columns, and a stanza
+  // that cannot be split (break-inside: avoid) can hang below its column
+  // without scrollHeight ever reporting it. So check all three: the width, the
+  // reported height, and where the stanza boxes actually end.
+  const overflows = (room) => {
+    if (el.scrollWidth > el.clientWidth + 1) return true;
+    const top = el.getBoundingClientRect().top;
+    let deepest = 0;
+    for (const st of el.children) {
+      const b = st.getBoundingClientRect().bottom - top;
+      if (b > deepest) deepest = b;
+    }
+    return Math.max(el.scrollHeight, deepest) > room + 1;
+  };
 
   const room = avail();
   const key = fitKey();
@@ -496,15 +508,28 @@ function layoutFit(el, song) {
     cols--;
   }
 
+  // Anything still poking past the fold means a scrollbar for a handful of
+  // pixels, which is worse than one step smaller. Tighten until it clears.
+  for (let i = 0; i < 8 && size > MIN && overflows(avail()); i++) {
+    size -= 1;
+    apply(cols, size);
+  }
+
   lastFitSize = size;
   el.classList.toggle('ruled', cols > 1);
 
   // If even the smallest readable type won't fit, the song is genuinely longer
   // than this screen. Let it scroll rather than shrink past legibility — and
   // never lock scrolling in that case, which would simply cut the song off.
-  const stillOver = overflows(room);
+  const stillOver = overflows(avail());
   el.dataset.overflowing = String(stillOver);
   document.documentElement.classList.toggle('locked', !stillOver);
+
+  // A song too long for the screen even at minimum size has to scroll. Without
+  // room under it the last lines sit behind the fixed dock and the scrollbar
+  // covers a useless 20-odd pixels; with it, the scroll actually reaches the
+  // end of the song.
+  song.style.paddingBottom = stillOver ? `${dockH + 28}px` : '0px';
 
   if (fitCache.size > 200) fitCache.clear();
   fitCache.set(key, { cols, size, over: stillOver });
@@ -514,6 +539,9 @@ function layoutFit(el, song) {
 
 function grooveBarHtml(g) {
   if (G.isEmpty(g)) {
+    // While playing, an empty "No rhythm noted yet" bar is 54px of nothing.
+    // The dock keeps the button, so the space goes to the song instead.
+    if (prefs.fit) return '';
     return `<div class="groove"><span class="g" style="color:var(--ink-3)">No rhythm noted yet</span>
       <span class="spacer"></span>
       <button class="btn quiet" data-act="groove" style="flex:none;min-height:34px;padding:0 12px">Add one</button></div>`;
@@ -601,6 +629,7 @@ function paintDock() {
     ${tuning}
     <span class="spacer"></span>
     ${meta.key ? `<button class="ico" data-act="chords" aria-pressed="${prefs.chords}" aria-label="Show chords"><svg viewBox="0 0 24 24">${ICONS.music}</svg></button>` : ''}
+    <button class="ico" data-act="tempo" aria-label="Rhythm"><svg viewBox="0 0 24 24">${ICONS.tempo}</svg></button>
     <button class="ico" data-act="fit" aria-pressed="${prefs.fit}" aria-label="Fit song to screen"><svg viewBox="0 0 24 24">${ICONS.fit}</svg></button>
     <button class="ico" data-act="size" aria-label="Text size"><svg viewBox="0 0 24 24">${ICONS.type}</svg></button>
     <button class="ico" data-act="autoscroll" aria-pressed="${!!autoscroll}" aria-label="Auto-scroll"><svg viewBox="0 0 24 24">${ICONS.scroll}</svg></button>
@@ -623,6 +652,8 @@ function paintDock() {
     } else if (act === 'chords') {
       prefs = await store.setPrefs({ chords: !prefs.chords });
       paintDock(); paintLyrics();
+    } else if (act === 'tempo') {
+      openGrooveSheet();
     } else if (act === 'fit') {
       prefs = await store.setPrefs({ fit: !prefs.fit });
       paintDock(); paintLyrics();
@@ -640,10 +671,11 @@ function paintDock() {
 // ----------------------------------------------------------- autoscroll
 
 function startAutoscroll() {
-  const speed = prefs.scroll || 22;   // pixels per second
   let last = performance.now(), acc = 0;
   const step = (now) => {
     if (!autoscroll) return;
+    // Read the speed each frame so changing it applies without restarting.
+    const speed = prefs.scroll || 22;   // pixels per second
     acc += (now - last) * speed / 1000;
     last = now;
     if (acc >= 1) { window.scrollBy(0, Math.floor(acc)); acc -= Math.floor(acc); }
@@ -671,6 +703,12 @@ function openSheet(html, wire) {
 }
 function closeSheet() { const s = $('#sheet'); if (s) { s.hidden = true; s.innerHTML = ''; } }
 
+/** Describe a scroll speed in something more useful than pixels per second. */
+function speedLabel(px) {
+  const lines = (px / 26).toFixed(1);   // ~26px per lyric line at default size
+  return `${lines} lines/s`;
+}
+
 function openSizeSheet() {
   openSheet(`
     <h2>Text size</h2>
@@ -680,10 +718,21 @@ function openSizeSheet() {
     <div class="opts">${[['auto', 'Automatic'], ['on', 'Always'], ['off', 'Never']].map(([v, l]) =>
       `<button class="opt" data-cols="${v}" aria-pressed="${prefs.cols === v}">${l}</button>`).join('')}</div>
     <h3>Auto-scroll speed</h3>
-    <div class="opts">${[['12', 'Slow'], ['22', 'Medium'], ['36', 'Fast']].map(([v, l]) =>
-      `<button class="opt" data-scroll="${v}" aria-pressed="${String(prefs.scroll || 22) === v}">${l}</button>`).join('')}</div>
+    <div class="speed">
+      <input id="speed" type="range" min="4" max="90" step="1" value="${prefs.scroll || 22}"
+             aria-label="Auto-scroll speed">
+      <span class="val" id="speedval">${speedLabel(prefs.scroll || 22)}</span>
+    </div>
+    <div class="hint" style="font-size:12px;color:var(--ink-3);margin-top:6px">
+      Adjusts while scrolling — no need to stop and restart.</div>
     <div class="actions"><button class="btn" data-act="close">Done</button></div>`,
     (s) => {
+      const slider = $('#speed', s);
+      slider.addEventListener('input', async () => {
+        const v = Number(slider.value);
+        $('#speedval', s).textContent = speedLabel(v);
+        prefs = await store.setPrefs({ scroll: v });
+      });
       s.onclick = async (e) => {
         if (e.target === s) return closeSheet();
         const b = e.target.closest('button');
@@ -691,7 +740,6 @@ function openSizeSheet() {
         if (b.dataset.act === 'close') return closeSheet();
         if (b.dataset.size) prefs = await store.setPrefs({ size: Number(b.dataset.size) });
         if (b.dataset.cols) prefs = await store.setPrefs({ cols: b.dataset.cols });
-        if (b.dataset.scroll) prefs = await store.setPrefs({ scroll: Number(b.dataset.scroll) });
         openSizeSheet();
         paintLyrics();
       };
@@ -856,17 +904,24 @@ function openSheetGlobal(html, wire) {
 function closeSheetGlobal() { const s = $('#gsheet'); if (s) { s.hidden = true; s.innerHTML = ''; } }
 
 let relayoutTimer = null, lastVW = 0, lastVH = 0;
+
 function scheduleRelayout() {
-  const w = viewportW(), h = viewportH();
-  // A URL bar sliding away is not a layout change worth re-fitting for.
-  if (w === lastVW && Math.abs(h - lastVH) < 120) return;
-  lastVW = w; lastVH = h;
+  lastVW = viewportW(); lastVH = viewportH();
   clearTimeout(relayoutTimer);
-  relayoutTimer = setTimeout(() => { if (current && $('#lyrics')) paintLyrics(); }, 150);
+  relayoutTimer = setTimeout(() => { if (current && $('#lyrics')) paintLyrics(); }, 120);
 }
+
+// The mobile URL bar sliding away reports here as a height-only change. That
+// is not a layout change worth re-fitting for; a real resize always is.
+function onVisualViewportResize() {
+  const w = viewportW(), h = viewportH();
+  if (w === lastVW && Math.abs(h - lastVH) < 120) return;
+  scheduleRelayout();
+}
+
 window.addEventListener('resize', scheduleRelayout);
 window.addEventListener('orientationchange', scheduleRelayout);
-window.visualViewport?.addEventListener('resize', scheduleRelayout);
+window.visualViewport?.addEventListener('resize', onVisualViewportResize);
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { closeSheet(); closeSheetGlobal(); }
 });

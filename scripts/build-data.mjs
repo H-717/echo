@@ -46,6 +46,20 @@ for (const f of readdirSync(RAW)) {
 songs.sort((a, b) => a.id - b.id);
 console.log(`loaded ${songs.length} songs, ${books.length} books, ${langs.length} languages`);
 
+// A handful of upstream records have no lyrics at all — there is nothing to
+// show for them and they only clutter the index. They are listed rather than
+// dropped silently, so it stays obvious what was removed and why.
+const empty = songs.filter((s) => !(s.lyrics || '').trim());
+if (empty.length) {
+  console.log(`
+skipping ${empty.length} record(s) with no lyrics:`);
+  for (const s of empty) console.log(`  id ${s.id}  ${JSON.stringify(s.title)}  (${s.lang})`);
+  console.log('');
+}
+const usable = songs.filter((s) => (s.lyrics || '').trim());
+songs.length = 0;
+songs.push(...usable);
+
 // ------------------------------------------------------- book back-refs
 
 // book.songs is { songId: hymnNumber }. Invert it so a song knows its books.
