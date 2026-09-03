@@ -39,7 +39,15 @@ const store = new Store(BASE);
 const metro = new G.Metronome();
 const tapper = new G.TapTempo();
 
-let prefs = { size: 17, chords: true, cols: 'auto', fit: true, langs: null, theme: null };
+// Only what the reader has changed is stored, so every read of the saved
+// prefs has to come back through the defaults — otherwise the first setting
+// anyone touches drops the rest to undefined.
+const PREFS = { size: 17, chords: true, cols: 'auto', fit: true, langs: null, theme: null };
+let prefs = { ...PREFS };
+async function savePrefs(patch) {
+  prefs = { ...PREFS, ...(await store.setPrefs(patch)) };
+  return prefs;
+}
 let current = null;   // { meta, lyrics, local, steps, capo }
 let autoscroll = null;
 
@@ -47,9 +55,9 @@ let autoscroll = null;
 
 (async function boot() {
   await store.init();
-  prefs = { ...prefs, ...(await store.prefs()) };
+  prefs = { ...PREFS, ...(await store.prefs()) };
   // Older builds could store several languages; keep only the first.
-  if (prefs.langs && prefs.langs.length > 1) prefs = await store.setPrefs({ langs: prefs.langs.slice(0, 1) });
+  if (prefs.langs && prefs.langs.length > 1) prefs = await savePrefs({ langs: prefs.langs.slice(0, 1) });
   applyTheme();
 
   store.on((ev) => { if (ev.type === 'sync') renderSyncStatus(ev.state); });
@@ -192,7 +200,7 @@ function renderLangFilters() {
     // One language at a time: picking another replaces it, picking the
     // active one (or All) clears back to every language.
     const next = !l || cur.includes(l) ? [] : [l];
-    prefs = await store.setPrefs({ langs: next });
+    prefs = await savePrefs({ langs: next });
     renderLangFilters();
     renderResults();
   };
@@ -436,6 +444,13 @@ function layoutNormal(el, song) {
     el.classList.add('cols');
     el.style.setProperty('--cols', '2');
     song.style.setProperty('--measure', '1160px');
+    // One unsplittable stanza fills one column however many are offered, and
+    // the empty one would sit inside the centred box. Read it as one column.
+    if (usedCols(el, 2) < 2) {
+      el.classList.remove('cols');
+      el.style.removeProperty('--cols');
+      song.style.setProperty('--measure', '720px');
+    }
   }
 }
 
@@ -498,6 +513,33 @@ function usedCols(el, cols) {
   return Math.max(1, Math.min(cols, used));
 }
 
+/**
+ * The widest a single column's words actually get.
+ *
+ * Every box around a line — the stanza, the body, the line itself — stretches
+ * to the full column, so none of them can answer this; only the text can. A
+ * stanza never splits, so each one sits in a single column, and its lines are
+ * measured from that column's left edge.
+ */
+function contentWidth(el, cols) {
+  const gap = 44;
+  const colW = (el.clientWidth - gap * (cols - 1)) / cols;
+  if (!(colW > 0) || !el.children.length) return 0;
+  const range = document.createRange();
+  const lyLeft = el.getBoundingClientRect().left;
+  let widest = 0;
+  for (const st of el.children) {
+    const col = Math.max(0, Math.round((st.getBoundingClientRect().left - lyLeft) / (colW + gap)));
+    const colLeft = lyLeft + col * (colW + gap);
+    for (const ln of st.querySelectorAll('.ln')) {
+      range.selectNodeContents(ln);
+      const r = range.getBoundingClientRect();
+      if (r.width) widest = Math.max(widest, r.right - colLeft);
+    }
+  }
+  return Math.ceil(widest);
+}
+
 function layoutFit(el, song) {
   song.classList.add('fit');
   el.classList.add('cols');
@@ -555,7 +597,10 @@ function layoutFit(el, song) {
   const cached = fitCache.get(key);
 
   if (cached) {
-    setWidth(song, cached.cols, chorded);
+    // Replay the width the fit finished with. Rebuilding it from the column
+    // count alone would hand back the roomy box the fit had already trimmed.
+    if (cached.measure) song.style.setProperty('--measure', cached.measure);
+    else setWidth(song, cached.cols, chorded);
     apply(cached.cols, cached.size);
     if (!overflows(room)) {
       el.classList.toggle('ruled', cached.cols > 1);
@@ -637,6 +682,24 @@ function layoutFit(el, song) {
     }
   }
 
+  // Whatever width is left over after that is width the words never reach:
+  // short lines in a box built for long ones, or the whole screen spent on a
+  // song that turned out to need a scroll anyway. Either way it reads as the
+  // song sitting off to one side, so hand the leftovers back and let the
+  // centring work on the words themselves.
+  const need = contentWidth(el, cols);
+  if (need > 0) {
+    const have = Math.round(song.getBoundingClientRect().width);
+    const want = Math.ceil(need * cols + 44 * (cols - 1) + (have - el.clientWidth)) + 1;
+    if (want < have) {
+      const tall = deepest();
+      song.style.setProperty('--measure', want + 'px');
+      // Nothing should rewrap — the column still holds its longest line — but
+      // a song pushed taller by this is worse off than one sitting off-centre.
+      if (deepest() > tall + 1) song.style.setProperty('--measure', have + 'px');
+    }
+  }
+
   lastFitSize = size;
   el.classList.toggle('ruled', cols > 1);
 
@@ -654,7 +717,7 @@ function layoutFit(el, song) {
   song.style.paddingBottom = stillOver ? `${dockH + 28}px` : '0px';
 
   if (fitCache.size > 200) fitCache.clear();
-  fitCache.set(key, { cols, size, over: stillOver });
+  fitCache.set(key, { cols, size, over: stillOver, measure: song.style.getPropertyValue('--measure') });
 }
 
 // ------------------------------------------------------------- groove UI
@@ -803,12 +866,12 @@ async function handleDockAction(act) {
       await store.setLocal(current.meta.id, { capo: current.capo || null });
       paintSong();
     } else if (act === 'chords') {
-      prefs = await store.setPrefs({ chords: !prefs.chords });
+      prefs = await savePrefs({ chords: !prefs.chords });
       paintDock(); paintLyrics();
     } else if (act === 'tempo') {
       openGrooveSheet();
     } else if (act === 'fit') {
-      prefs = await store.setPrefs({ fit: !prefs.fit });
+      prefs = await savePrefs({ fit: !prefs.fit });
       // Repaint the whole view: whether the heading and an empty rhythm bar
       // are shown depends on the mode, and only paintSong rebuilds those.
       paintSong();
@@ -937,15 +1000,15 @@ function openSizeSheet() {
       slider.addEventListener('input', async () => {
         const v = Number(slider.value);
         $('#speedval', s).textContent = speedLabel(v);
-        prefs = await store.setPrefs({ scroll: v });
+        prefs = await savePrefs({ scroll: v });
       });
       s.onclick = async (e) => {
         if (e.target === s) return closeSheet();
         const b = e.target.closest('button');
         if (!b) return;
         if (b.dataset.act === 'close') return closeSheet();
-        if (b.dataset.size) prefs = await store.setPrefs({ size: Number(b.dataset.size) });
-        if (b.dataset.cols) prefs = await store.setPrefs({ cols: b.dataset.cols });
+        if (b.dataset.size) prefs = await savePrefs({ size: Number(b.dataset.size) });
+        if (b.dataset.cols) prefs = await savePrefs({ cols: b.dataset.cols });
         openSizeSheet();
         paintLyrics();
       };
@@ -1101,7 +1164,7 @@ function openSettings() {
         if (!b) return;
         if (b.dataset.act === 'close') return closeSheetGlobal();
         if (b.dataset.theme !== undefined) {
-          prefs = await store.setPrefs({ theme: b.dataset.theme || null });
+          prefs = await savePrefs({ theme: b.dataset.theme || null });
           applyTheme();
           openSettings();
         }
