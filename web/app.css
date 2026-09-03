@@ -196,6 +196,10 @@ a { color: inherit; text-decoration: none; }
 .lyrics.cols.ruled { column-rule: 1px solid var(--rule); }
 
 .st { display: flex; gap: 12px; margin: 0 0 20px; }
+/* The gap under the last stanza is space between stanzas, not part of the
+   song. A column end swallows it but a single column keeps it, which made the
+   same words measure 20px taller in one layout than the other. */
+.lyrics .st:last-child { margin-bottom: 0; }
 .st .no {
   flex: none; width: 14px; text-align: right;
   color: var(--ink-3); font-size: .82em; font-variant-numeric: tabular-nums;

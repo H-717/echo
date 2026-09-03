@@ -477,6 +477,27 @@ function setWidth(song, cols, chorded) {
   song.style.setProperty('--measure', Math.min(wanted, avail) + 'px');
 }
 
+/**
+ * How many of the reserved columns the stanzas actually reached.
+ *
+ * Columns are filled left to right, so the rightmost edge any stanza reaches
+ * tells us how many were needed. Anything past that is empty space the
+ * centring would otherwise count as part of the song.
+ */
+function usedCols(el, cols) {
+  if (cols < 2) return cols;
+  const gap = 44;
+  const colW = (el.clientWidth - gap * (cols - 1)) / cols;
+  if (!(colW > 0)) return cols;
+  const left = el.getBoundingClientRect().left;
+  let used = 1;
+  for (const st of el.children) {
+    const right = st.getBoundingClientRect().right - left;
+    used = Math.max(used, Math.ceil((right - 1) / (colW + gap)));
+  }
+  return Math.max(1, Math.min(cols, used));
+}
+
 function layoutFit(el, song) {
   song.classList.add('fit');
   el.classList.add('cols');
@@ -515,15 +536,16 @@ function layoutFit(el, song) {
 
   // How far down the content actually reaches. A stanza that cannot be split
   // can hang below its column without scrollHeight ever reporting it.
-  const contentHeight = () => {
+  const deepest = () => {
     const top = el.getBoundingClientRect().top;
-    let deepest = 0;
+    let d = 0;
     for (const st of el.children) {
       const b = st.getBoundingClientRect().bottom - top;
-      if (b > deepest) deepest = b;
+      if (b > d) d = b;
     }
-    return Math.max(el.scrollHeight, deepest);
+    return d;
   };
+  const contentHeight = () => Math.max(el.scrollHeight, deepest());
 
   // Content that will not fit also spills sideways into extra columns.
   const overflows = (room) => el.scrollWidth > el.clientWidth + 1 || contentHeight() > room + 1;
@@ -587,6 +609,32 @@ function layoutFit(el, song) {
     cols = maxCols;
     song.style.setProperty('--measure', (viewportW() - 32) + 'px');
     size = converge(cols);
+  }
+
+  // A stanza cannot be broken across columns, so a song of one long stanza
+  // lands entirely in the first one however many are reserved — and the empty
+  // ones still count toward the centred box, shoving the words off to one
+  // side. Hand back whatever nothing was laid into.
+  const used = usedCols(el, cols);
+  if (used < cols) {
+    const wide = song.style.getPropertyValue('--measure');
+    // Compare where the words actually end: a multicol scrollHeight shifts by
+    // a few pixels with the column count even when nothing moves.
+    const tall = deepest();
+    // Keep the column exactly as wide as it just was, padding included, so no
+    // line rewraps and the height we just measured still holds.
+    const gutter = song.getBoundingClientRect().width - el.clientWidth;
+    const colW = (el.clientWidth - 44 * (cols - 1)) / cols;
+    song.style.setProperty('--measure', Math.ceil(used * colW + (used - 1) * 44 + gutter) + 'px');
+    apply(used, size);
+    // Judge the change against what we had, not against the screen: a song
+    // too long to fit is still better off without an empty column beside it.
+    if (deepest() > tall + 1 || el.scrollWidth > el.clientWidth + 1) {
+      song.style.setProperty('--measure', wide);
+      apply(cols, size);
+    } else {
+      cols = used;
+    }
   }
 
   lastFitSize = size;
