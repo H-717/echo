@@ -48,6 +48,8 @@ let autoscroll = null;
 (async function boot() {
   await store.init();
   prefs = { ...prefs, ...(await store.prefs()) };
+  // Older builds could store several languages; keep only the first.
+  if (prefs.langs && prefs.langs.length > 1) prefs = await store.setPrefs({ langs: prefs.langs.slice(0, 1) });
   applyTheme();
 
   store.on((ev) => { if (ev.type === 'sync') renderSyncStatus(ev.state); });
@@ -186,9 +188,10 @@ function renderLangFilters() {
     const b = e.target.closest('[data-lang]');
     if (!b) return;
     const l = b.dataset.lang;
-    let next = prefs.langs || [];
-    if (!l) next = [];
-    else next = next.includes(l) ? next.filter((x) => x !== l) : [...next, l];
+    const cur = prefs.langs || [];
+    // One language at a time: picking another replaces it, picking the
+    // active one (or All) clears back to every language.
+    const next = !l || cur.includes(l) ? [] : [l];
     prefs = await store.setPrefs({ langs: next });
     renderLangFilters();
     renderResults();
@@ -249,7 +252,7 @@ function renderResults() {
   window.removeEventListener('scroll', onListScroll);
 
   if (!total && !listState.lyricHits.length) {
-    el.innerHTML = `<div class="empty">${listState.q ? `Nothing matches “${esc(listState.q)}”.` : 'No songs in the selected languages.'}</div>`;
+    el.innerHTML = `<div class="empty">${listState.q ? `Nothing matches “${esc(listState.q)}”.` : 'No songs in the selected language.'}</div>`;
     return;
   }
 
