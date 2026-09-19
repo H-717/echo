@@ -1,4 +1,4 @@
-# Song accumulation
+# Echo
 
 All 9,216 songs, 18 languages, 9 hymnals — offline,
 with chords that stay attached to the right syllable at any window size.
@@ -22,8 +22,8 @@ Pushing to `main` builds and publishes to GitHub Pages automatically
 To check a deploy locally first:
 
 ```bash
-node scripts/build-site.mjs --base songbase   # the repo name
-node scripts/preview.mjs --base songbase      # serves dist/ the way Pages does
+node scripts/build-site.mjs --base echo   # the repo name
+node scripts/preview.mjs --base echo      # serves dist/ the way Pages does
 ```
 
 The site works from a domain root or a project subpath: `--base` is stamped
