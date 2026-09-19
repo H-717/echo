@@ -1,6 +1,6 @@
-# Songbase
+# Song accumulation
 
-A rebuild of songbase.life. All 9,216 songs, 18 languages, 9 hymnals — offline,
+All 9,216 songs, 18 languages, 9 hymnals — offline,
 with chords that stay attached to the right syllable at any window size.
 
 ## Running it
